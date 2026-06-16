@@ -1,0 +1,39 @@
+# Callme 服务启动配置示例
+# 首次启动后，请在管理员「设置」页面配置 Agent 类型、模型、API 地址、Token、系统提示词和坐席容量。
+
+server:
+  host: 0.0.0.0
+  port: 8090
+
+database:
+  driver: sqlite
+  dsn: data/callme.db
+
+agent:
+  hermes_home: data/hermes-home # Hermes 持久化目录：配置、记忆、学习笔记
+  work_dir: data/workdir        # 会话工作目录根
+
+auth:
+  token_ttl: 168h
+
+session:
+  idle_warn_after: 5m
+  idle_close_after: 10m
+  max_duration: 2h
+  max_per_client: 1
+
+feedback:
+  distill_interval: 10m
+  notes_max_entries: 200
+
+handoff:
+  webhook_url: ""
+  webhook_headers: {}
+
+# 日志配置
+log:
+  path: logs/callme.log   # 日志文件路径（空则只输出控制台）
+  max_size: 100           # 单文件最大 MB
+  max_backups: 3          # 保留旧文件数
+  max_age: 7              # 保留天数
+  compress: true          # 压缩旧文件

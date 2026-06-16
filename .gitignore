@@ -1,0 +1,29 @@
+# 构建产物
+/bin/
+/dist/
+/callme-server
+web/dist/
+web/node_modules/
+node_modules/
+
+# 运行时数据与密钥（含 SQLite 库、Hermes 持久化 config.yaml/记忆，切勿提交）
+/data/
+/logs/
+
+# 真实配置（含敏感项时）；仅提交 config.yaml.example 模板
+/configs/config.yaml
+/configs/config.yaml.new
+
+# 运行时 PID
+callme.pid
+
+# 升级临时目录与历史备份（可能包含 data/、数据库、Token）
+/backups/
+/.upgrade-tmp-*/
+
+# 临时与系统文件
+*.log
+.DS_Store
+
+# 本机 Claude Code 配置
+/.claude/

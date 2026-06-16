@@ -2,7 +2,7 @@
 # Callme Linux 发布包打包脚本
 #
 # 产物：dist/callme-<version>-linux-<arch>.tar.gz
-# 包含：callme-server (linux 二进制) + web 前端 + 配置模板 + 启停/升级脚本 + systemd 模板
+# 包含：callme-server (linux 二进制) + web 前端 + 配置模板 + 启停/升级脚本 + systemd 模板 + LICENSE
 # 不含：mock-kb（cmd/mock-kb 仅本地联调用）、真实 config.yaml、data/（数据库/密钥）、日志
 #
 # 用法:
@@ -167,8 +167,9 @@ cp -R "${ROOT}/web/dist" "${STAGE}/web/dist"
 echo "==> 拷贝配置模板"
 cp "${ROOT}/configs/config.yaml.example" "${STAGE}/configs/config.yaml.example"
 
-# 4) 启动脚本 + systemd 模板 + 安装说明
+# 4) 启动脚本 + systemd 模板 + 安装说明 + 许可证
 install_runtime_files "${STAGE}" "${VERSION}"
+cp "${ROOT}/LICENSE" "${STAGE}/LICENSE"
 
 # 5) 敏感内容自检（任何一项命中即终止，避免泄密）
 security_scan "${STAGE}"

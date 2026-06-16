@@ -295,6 +295,7 @@ dist/callme-<version>-linux-amd64.tar.gz
 - `upgrade.sh`
 - `callme.service`
 - `INSTALL.md`
+- `LICENSE`
 
 发布包不包含：
 
@@ -369,3 +370,7 @@ npm run build --prefix web
 - 生产知识库 MCP 的鉴权、超时、重试、健康检查策略需要和企业内网环境对齐。
 - `data/hermes-home` 可能包含敏感信息，备份和升级目录需要配置合适的文件权限。
 - 大型前端 chunk 目前有 Vite 警告，后续可按页面拆包优化。
+
+## License
+
+Callme is licensed under the Apache License, Version 2.0. See [LICENSE](./LICENSE) for details.

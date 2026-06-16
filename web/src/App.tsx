@@ -32,10 +32,10 @@ const { Text } = Typography;
 
 const menuItems = [
   { key: '/chat', icon: <CommentOutlined />, label: '智能问答' },
-  { key: '/knowledge', icon: <FileSearchOutlined />, label: '知识检索' },
 ];
 
 const adminMenuItems = [
+  { key: '/knowledge', icon: <FileSearchOutlined />, label: '知识检索' },
   { key: '/dashboard', icon: <DashboardOutlined />, label: '效能看板' },
   { key: '/monitor', icon: <DesktopOutlined />, label: '会话监控' },
   { key: '/tickets', icon: <FileTextOutlined />, label: '升级工单' },
@@ -135,9 +135,9 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/chat" replace />} />
           <Route path="/chat" element={<ChatPage />} />
-          <Route path="/knowledge" element={<KnowledgePage />} />
           {user.role === 'admin' && (
             <>
+              <Route path="/knowledge" element={<KnowledgePage />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/monitor" element={<MonitorPage />} />
               <Route path="/tickets" element={<TicketsPage />} />

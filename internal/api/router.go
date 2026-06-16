@@ -84,9 +84,9 @@ func NewRouter(d *Deps) *gin.Engine {
 		protected.DELETE("/users/:id", d.adminRequired(), d.deleteUser)
 
 		// 知识源
-		protected.GET("/knowledge/sources", d.listKnowledgeSources)
+		protected.GET("/knowledge/sources", d.adminRequired(), d.listKnowledgeSources)
 		protected.POST("/knowledge/health", d.adminRequired(), d.checkKnowledgeHealth)
-		protected.POST("/knowledge/query", d.queryKnowledge)
+		protected.POST("/knowledge/query", d.adminRequired(), d.queryKnowledge)
 
 		// 看板
 		protected.GET("/stats/overview", d.adminRequired(), d.getStatsOverview)

@@ -1,6 +1,5 @@
-// 知识检索页：直接检索代码图谱 / wiki 知识图谱
-// 与"智能客服"是包含关系——客服回答时 Agent 自动调用这些知识源（MCP 工具），
-// 本页面提供独立的直查入口，便于运营核对知识源质量与排查命中问题。
+// 知识检索页：管理员直查 Callme 后端已配置的 HTTP MCP 知识源。
+// 智能问答中的 Agent 也可能通过自身本地 MCP 配置调用知识库，但那条链路不一定会暴露给本页面。
 import { useEffect, useState } from 'react';
 import {
   Alert,
@@ -42,6 +41,7 @@ export default function KnowledgePage() {
   const [results, setResults] = useState<QueryResultItem[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [checking, setChecking] = useState(false);
+  const httpSources = sources.filter((s) => s.transport === 'http');
 
   useEffect(() => {
     api.listKnowledgeSources().then(setSources).catch((err) => message.error(apiErrorMessage(err)));
@@ -66,7 +66,7 @@ export default function KnowledgePage() {
     if (!q) return;
     const targets =
       selected === '__all__'
-        ? sources.filter((s) => s.transport === 'http').map((s) => s.name)
+        ? httpSources.map((s) => s.name)
         : [selected];
     if (targets.length === 0) {
       message.warning('没有可直查的 http 类型知识源');
@@ -97,7 +97,7 @@ export default function KnowledgePage() {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="智能客服回答问题时会自动调用以下知识源（代码图谱 / Wiki 知识图谱）。本页面提供直接检索入口，便于核对知识源内容与排查回答依据。"
+        message="管理员诊断入口：本页面只直查 Callme 后端已配置的 HTTP MCP 知识源，用于核对知识源内容、健康状态与命中结果。Agent 本地配置的 MCP 不一定会出现在这里。"
       />
 
       <Card
@@ -124,7 +124,7 @@ export default function KnowledgePage() {
             </Tag>
           ))}
           {sources.length === 0 && (
-            <Text type="secondary">尚未配置知识源，请在 Agent 本地 MCP 配置中添加</Text>
+            <Text type="secondary">尚未配置可直查知识源。若只在 Agent 本地配置 MCP，请通过智能问答验证 Agent 调用链路。</Text>
           )}
         </Space>
       </Card>
@@ -136,8 +136,13 @@ export default function KnowledgePage() {
           style={{ width: 200 }}
           options={[
             { value: '__all__', label: '全部知识源' },
-            ...sources.map((s) => ({ value: s.name, label: s.displayName || s.name })),
+            ...sources.map((s) => ({
+              value: s.name,
+              label: s.displayName || s.name,
+              disabled: s.transport !== 'http',
+            })),
           ]}
+          disabled={httpSources.length === 0}
         />
         <Input
           placeholder="输入检索关键词，如：会话超时配置"
@@ -145,8 +150,15 @@ export default function KnowledgePage() {
           onChange={(e) => setQuery(e.target.value)}
           onPressEnter={onSearch}
           allowClear
+          disabled={httpSources.length === 0}
         />
-        <Button type="primary" icon={<SearchOutlined />} loading={searching} onClick={onSearch}>
+        <Button
+          type="primary"
+          icon={<SearchOutlined />}
+          loading={searching}
+          disabled={httpSources.length === 0}
+          onClick={onSearch}
+        >
           检索
         </Button>
       </Space.Compact>

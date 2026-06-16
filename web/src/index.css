@@ -220,6 +220,19 @@ body,
   flex: 1;
   overflow: auto;
   padding: 8px 4px;
+  position: relative;
+  scroll-behavior: smooth;
+}
+
+.scroll-bottom-btn {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  display: block;
+  margin: -40px auto 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+  border-color: var(--border-light);
+  background: var(--bg-container);
 }
 
 .chat-input-wrap {

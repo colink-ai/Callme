@@ -38,6 +38,7 @@ import {
   PlayCircleOutlined,
   PictureOutlined,
   CloseOutlined,
+  DownOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
 } from '@ant-design/icons';
@@ -75,6 +76,7 @@ const ASSISTANT_DISPLAY_NAME = 'Callme 助手';
 const ASSISTANT_FULL_NAME = 'Callme 智能问题解决助手';
 const MAX_IMAGES = 4;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+const AUTO_SCROLL_BOTTOM_THRESHOLD = 80;
 
 function formatAgentType(type?: string): string {
   if (!type) return '';
@@ -524,14 +526,41 @@ export default function ChatPage() {
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [handoffReason, setHandoffReason] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
+  const [stickToBottom, setStickToBottom] = useState(true);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
 
   useEffect(() => {
     restoreSession();
   }, [restoreSession]);
 
+  const isNearBottom = useCallback((el: HTMLDivElement) => (
+    el.scrollHeight - el.scrollTop - el.clientHeight <= AUTO_SCROLL_BOTTOM_THRESHOLD
+  ), []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
+
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, thinking]);
+    setStickToBottom(true);
+    setShowScrollBottom(false);
+    window.requestAnimationFrame(() => scrollToBottom('auto'));
+  }, [session?.id, scrollToBottom]);
+
+  useEffect(() => {
+    if (!stickToBottom) return;
+    window.requestAnimationFrame(() => scrollToBottom(thinking || busy ? 'auto' : 'smooth'));
+  }, [messages, thinking, busy, stickToBottom, scrollToBottom]);
+
+  const onMessagesScroll = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const nearBottom = isNearBottom(el);
+    setStickToBottom(nearBottom);
+    setShowScrollBottom(!nearBottom);
+  }, [isNearBottom]);
 
   const active = session?.status === 'active' && !closedReason;
   const queued = session?.status === 'queued' && !closedReason && position > 0;
@@ -614,6 +643,8 @@ export default function ChatPage() {
   const onSend = () => {
     const content = input.trim();
     if ((!content && images.length === 0) || busy || !active) return;
+    setStickToBottom(true);
+    setShowScrollBottom(false);
     sendMessage(content, images.length > 0 ? images : undefined);
     setInput('');
     setImages([]);
@@ -714,7 +745,7 @@ export default function ChatPage() {
             )}
 
             {/* 消息区 */}
-            <div ref={listRef} className="chat-messages">
+            <div ref={listRef} className="chat-messages" onScroll={onMessagesScroll}>
               {!session && (
                 <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
                   <LogoIcon size={72} />
@@ -761,6 +792,20 @@ export default function ChatPage() {
               {messages.map((m, i) => (
                 <MessageBubble key={`${m.id}-${i}`} msg={m} sessionModel={session?.model} sessionAgentType={session?.agentType} />
               ))}
+              {showScrollBottom && (
+                <Tooltip title="回到底部">
+                  <Button
+                    className="scroll-bottom-btn"
+                    shape="circle"
+                    icon={<DownOutlined />}
+                    onClick={() => {
+                      setStickToBottom(true);
+                      setShowScrollBottom(false);
+                      scrollToBottom('smooth');
+                    }}
+                  />
+                </Tooltip>
+              )}
             </div>
 
             {/* 输入区 */}

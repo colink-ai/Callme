@@ -48,9 +48,7 @@ Callme 的目标是成为企业内部的“智能问题解决层”：
 
 ## 技术架构
 
-![Callme 技术架构图](docs/callme-architecture.svg)
-
-> 上图源文件为 [`docs/callme-architecture.excalidraw`](docs/callme-architecture.excalidraw)，可在 [excalidraw.com](https://excalidraw.com) 打开编辑后重新导出 SVG。
+![Callme 技术架构图](docs/callme-architecture.png)
 
 ```text
 Browser (React + AntD)

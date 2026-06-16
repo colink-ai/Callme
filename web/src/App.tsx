@@ -1,4 +1,4 @@
-import { Avatar, Button, Dropdown, Layout, Menu, Space, Spin, Tag, Typography } from 'antd';
+import { Avatar, Dropdown, Layout, Menu, Space, Spin, Tag, Typography } from 'antd';
 import {
   BgColorsOutlined,
   CheckOutlined,
@@ -40,7 +40,7 @@ const adminMenuItems = [
   { key: '/settings', icon: <SettingOutlined />, label: '设置' },
 ];
 
-// 主题切换器（参考 Colink：「主题」按钮 + 点击下拉，色块预览 + 勾选）
+// 主题切换器（参考 ReviewBuddy：只有图标，没有文字）
 function ThemeSwitcher() {
   const { theme, setTheme } = useThemeStore();
   const items = themeList.map((t) => ({
@@ -56,9 +56,7 @@ function ThemeSwitcher() {
   }));
   return (
     <Dropdown menu={{ items, selectedKeys: [theme] }} trigger={['click']} placement="bottomRight">
-      <Button type="text" className="theme-switcher-btn" icon={<BgColorsOutlined />}>
-        主题
-      </Button>
+      <BgColorsOutlined style={{ fontSize: 18, cursor: 'pointer', color: 'var(--text-primary)' }} />
     </Dropdown>
   );
 }
@@ -66,7 +64,7 @@ function ThemeSwitcher() {
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { token, user, restoring, restore, logout } = useAuthStore();
+  const { token, user, version, restoring, restore, logout } = useAuthStore();
   const resetChat = useChatStore((s) => s.reset);
   const allItems = user?.role === 'admin' ? [...menuItems, ...adminMenuItems] : menuItems;
   const selected = allItems.find((m) => location.pathname.startsWith(m.key))?.key ?? '/chat';
@@ -100,8 +98,8 @@ export default function App() {
             style={{ minWidth: 0, flex: 1, borderBottom: 'none', background: 'transparent' }}
           />
         </div>
-        <Space size={16} className="app-header-right">
-          <ThemeSwitcher />
+        <Space size={12} className="app-header-right">
+          {version ? <Tag style={{ margin: 0, fontSize: 11 }}>v{version}</Tag> : null}
           <Dropdown
             menu={{
               items: [
@@ -118,14 +116,13 @@ export default function App() {
               ],
             }}
           >
-            <Button type="text">
-              <Space>
-                <Avatar size={24} icon={<UserOutlined />} />
-                <span>{user.username}</span>
-                <Tag color={user.role === 'vip' ? 'gold' : user.role === 'admin' ? 'red' : 'default'}>{roleLabel}</Tag>
-              </Space>
-            </Button>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: 'var(--text-primary)' }}>
+              <Avatar size={22} icon={<UserOutlined />} />
+              <span style={{ fontSize: 14 }}>{user.username}</span>
+              <Tag color={user.role === 'vip' ? 'gold' : user.role === 'admin' ? 'red' : 'default'} style={{ margin: 0, fontSize: 11 }}>{roleLabel}</Tag>
+            </span>
           </Dropdown>
+          <ThemeSwitcher />
         </Space>
       </Header>
       <Content style={{ overflow: 'auto', background: 'var(--gradient-bg)' }}>

@@ -27,14 +27,15 @@ import (
 type Deps struct {
 	Store    *repo.Store
 	Sessions *session.Manager
-	Settings *settings.Service
-	Auth     *auth.Service
-	Feedback *feedback.Service
-	Handoff  *handoff.Service
-	Stats    *stats.Service
-	WS       *ws.Handler
-	Logger   *zap.Logger
-	WebDist  string // 前端构建产物目录（为空则不挂载）
+	Settings  *settings.Service
+	Auth      *auth.Service
+	Feedback   *feedback.Service
+	Handoff    *handoff.Service
+	Stats      *stats.Service
+	WS         *ws.Handler
+	Logger     *zap.Logger
+	WebDist    string // 前端构建产物目录（为空则不挂载）
+	Version    string // 应用版本号
 }
 
 // NewRouter 构建 Gin 路由
@@ -200,7 +201,7 @@ func (d *Deps) logout(c *gin.Context) {
 }
 
 func (d *Deps) me(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"user": currentUser(c)})
+	c.JSON(http.StatusOK, gin.H{"user": currentUser(c), "version": d.Version})
 }
 
 // ---------- 会话 ----------

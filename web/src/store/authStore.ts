@@ -8,6 +8,7 @@ const EXPIRES_KEY = 'callme_auth_expires_at';
 interface AuthState {
   token: string | null;
   user: User | null;
+  version: string;
   restoring: boolean;
   restore: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
@@ -36,6 +37,7 @@ const initialToken = storedToken();
 export const useAuthStore = create<AuthState>((set, get) => ({
   token: initialToken,
   user: null,
+  version: '',
   restoring: !!initialToken,
 
   applyLogin: (result) => {
@@ -47,17 +49,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   restore: async () => {
     const token = storedToken();
     if (!token) {
-      if (!token) set({ token: null, user: null });
+      if (!token) set({ token: null, user: null, version: '' });
       return;
     }
     set({ token, restoring: true });
     try {
-      const { user } = await api.me();
-      set({ user });
+      const { user, version } = await api.me();
+      set({ user, version: version || '' });
     } catch {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(EXPIRES_KEY);
-      set({ token: null, user: null });
+      set({ token: null, user: null, version: '' });
     } finally {
       set({ restoring: false });
     }

@@ -128,6 +128,7 @@ func main() {
 		WS:       wsHandler,
 		Logger:   logger,
 		WebDist:  dist,
+		Version:  version,
 	})
 
 	// 优雅退出：结束所有会话回收 Hermes 进程

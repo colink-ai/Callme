@@ -33,7 +33,7 @@ export const api = {
   login: (username: string, password: string) =>
     http.post<LoginResult>('/auth/login', { username, password }).then((r) => r.data),
   logout: () => http.post('/auth/logout'),
-  me: () => http.get<{ user: User }>('/auth/me').then((r) => r.data),
+  me: () => http.get<{ user: User; version?: string }>('/auth/me').then((r) => r.data),
   listUsers: () => http.get<{ users: User[] | null }>('/users').then((r) => r.data.users ?? []),
   updateUserRole: (id: string, role: UserRole) => http.put(`/users/${id}/role`, { role }),
   deleteUser: (id: string) => http.delete(`/users/${id}`),

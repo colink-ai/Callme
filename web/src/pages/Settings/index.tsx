@@ -1,9 +1,8 @@
-// 设置页：模型切换（Hermes 配置）、坐席容量、知识源健康、学习笔记查看
+// 设置页：模型切换（Hermes 配置）、坐席容量、学习笔记查看
 import { useEffect, useState } from 'react';
 import {
   Button,
   Card,
-  Descriptions,
   Form,
   Input,
   InputNumber,
@@ -14,9 +13,9 @@ import {
   Typography,
   message,
 } from 'antd';
-import { ApiOutlined, BookOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
+import { ApiOutlined, BookOutlined } from '@ant-design/icons';
 import { api, apiErrorMessage } from '../../api/client';
-import type { AgentSettings, KnowledgeSourceInfo, PoolSettings } from '../../types';
+import type { AgentSettings, PoolSettings } from '../../types';
 
 const { Title, Text } = Typography;
 
@@ -24,8 +23,6 @@ export default function SettingsPage() {
   const [agentForm] = Form.useForm<AgentSettings>();
   const [poolForm] = Form.useForm<PoolSettings>();
   const [types, setTypes] = useState<{ type: string; name: string; defaultPath?: string }[]>([]);
-  const [sources, setSources] = useState<KnowledgeSourceInfo[]>([]);
-  const [healthChecking, setHealthChecking] = useState(false);
   const [agentChecking, setAgentChecking] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [notes, setNotes] = useState('');
@@ -33,16 +30,14 @@ export default function SettingsPage() {
   useEffect(() => {
     (async () => {
       try {
-        const [a, p, t, s] = await Promise.all([
+        const [a, p, t] = await Promise.all([
           api.getAgentSettings(),
           api.getPoolSettings(),
           api.getAgentTypes(),
-          api.listKnowledgeSources(),
         ]);
         agentForm.setFieldsValue(a);
         poolForm.setFieldsValue(p);
         setTypes(t);
-        setSources(s);
       } catch (err) {
         message.error(apiErrorMessage(err));
       }
@@ -80,17 +75,6 @@ export default function SettingsPage() {
       message.error(apiErrorMessage(err));
     } finally {
       setAgentChecking(false);
-    }
-  };
-
-  const checkKnowledge = async () => {
-    setHealthChecking(true);
-    try {
-      setSources(await api.checkKnowledgeHealth());
-    } catch (err) {
-      message.error(apiErrorMessage(err));
-    } finally {
-      setHealthChecking(false);
     }
   };
 
@@ -177,36 +161,6 @@ export default function SettingsPage() {
           </Form.Item>
           <Button type="primary" onClick={savePool}>保存</Button>
         </Form>
-      </Card>
-
-      <Card
-        title="知识源（MCP）"
-        style={{ marginBottom: 16 }}
-        extra={
-          <Button onClick={checkKnowledge} loading={healthChecking}>健康检查</Button>
-        }
-      >
-        <Descriptions column={1} size="small">
-          {sources.map((s) => (
-            <Descriptions.Item key={s.name} label={s.displayName || s.name}>
-              <Space>
-                <Tag>{s.transport}</Tag>
-                {s.healthy === undefined ? (
-                  <Text type="secondary">未检查</Text>
-                ) : s.healthy ? (
-                  <Tag icon={<CheckCircleOutlined />} color="success">正常</Tag>
-                ) : (
-                  <Tag icon={<CloseCircleOutlined />} color="error">不可用</Tag>
-                )}
-              </Space>
-            </Descriptions.Item>
-          ))}
-          {sources.length === 0 && (
-            <Descriptions.Item label="提示">
-              <Text type="secondary">尚未配置知识源，请在 Agent 本地 MCP 配置中添加</Text>
-            </Descriptions.Item>
-          )}
-        </Descriptions>
       </Card>
 
       <Card title="自学习">

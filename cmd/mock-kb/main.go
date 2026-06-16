@@ -5,7 +5,7 @@
 //   - /wiki/mcp  Wiki 知识图谱（产品使用/运维问答）
 //
 // 实现最小 MCP 服务面：initialize / notifications/initialized / tools/list / tools/call(query)。
-// 同时兼容 Callme 后端代理查询（直接 POST tools/call）与 Hermes 的 http MCP 客户端。
+// 兼容 Hermes 的 http MCP 客户端。
 //
 // 用法: go run ./cmd/mock-kb [-port 9100]
 package main
@@ -48,9 +48,9 @@ var codeKB = []kbEntry{
 		Keywords: []string{"ACP", "mcpServers", "session/new", "session/resume", "Hermes", "OpenCode"},
 	},
 	{
-		Title:    "知识检索服务 internal/service/knowledge/service.go",
-		Content:  "Knowledge Service 仍提供知识源列表、健康检查和后端代理查询能力。HTTP 类型知识源可通过 tools/call(query) 直查，用于知识检索页与健康检查；Agent 主通道则优先交给 Hermes 本地 mcp_servers 配置，不再依赖 ACP 注入。",
-		Keywords: []string{"知识", "检索", "MCP", "健康检查", "query", "knowledge"},
+		Title:    "知识库 MCP 配置",
+		Content:  "Callme 不再提供独立的知识检索页和后端代理查询服务。知识库 MCP 由具体 Agent 的本地配置机制负责；Hermes 使用 HERMES_HOME/config.yaml 顶层 mcp_servers 连接 code-graph、wiki-graph 等 MCP 服务。",
+		Keywords: []string{"知识", "检索", "MCP", "Hermes", "mcp_servers", "knowledge"},
 	},
 	{
 		Title:    "历史会话继续 internal/service/session/manager.go",

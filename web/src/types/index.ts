@@ -139,13 +139,6 @@ export interface PoolSettings {
   updatedAt?: string;
 }
 
-export interface KnowledgeSourceInfo {
-  name: string;
-  displayName: string;
-  transport: string;
-  healthy?: boolean;
-}
-
 export interface StatsOverview {
   activeSessions: number;
   queuedSessions: number;

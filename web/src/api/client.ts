@@ -4,7 +4,6 @@ import type {
   AgentSettings,
   DailyPoint,
   HotQuestion,
-  KnowledgeSourceInfo,
   LoginResult,
   Message,
   PoolSettings,
@@ -96,23 +95,6 @@ export const api = {
       .then((r) => r.data.types),
   checkAgentHealth: () =>
     http.post<{ healthy: boolean; error?: string }>('/agent/health').then((r) => r.data),
-
-  // 知识源
-  listKnowledgeSources: () =>
-    http
-      .get<{ sources: KnowledgeSourceInfo[] | null }>('/knowledge/sources')
-      .then((r) => r.data.sources ?? []),
-  checkKnowledgeHealth: () =>
-    http
-      .post<{ sources: KnowledgeSourceInfo[] | null }>('/knowledge/health')
-      .then((r) => r.data.sources ?? []),
-  queryKnowledge: (source: string, query: string, limit = 5) =>
-    http
-      .post<{ source: string; query: string; content?: string; error?: string }>(
-        '/knowledge/query',
-        { source, query, limit },
-      )
-      .then((r) => r.data),
 
   // 看板
   getStatsOverview: () => http.get<StatsOverview>('/stats/overview').then((r) => r.data),

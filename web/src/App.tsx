@@ -5,7 +5,6 @@ import {
   CommentOutlined,
   DashboardOutlined,
   DesktopOutlined,
-  FileSearchOutlined,
   FileTextOutlined,
   SettingOutlined,
   TeamOutlined,
@@ -16,7 +15,6 @@ import Logo from './components/Logo';
 import AuthPage from './pages/Auth';
 import ChatPage from './pages/Chat';
 import DashboardPage from './pages/Dashboard';
-import KnowledgePage from './pages/Knowledge';
 import MonitorPage from './pages/Monitor';
 import TicketsPage from './pages/Tickets';
 import SettingsPage from './pages/Settings';
@@ -35,7 +33,6 @@ const menuItems = [
 ];
 
 const adminMenuItems = [
-  { key: '/knowledge', icon: <FileSearchOutlined />, label: '知识检索' },
   { key: '/dashboard', icon: <DashboardOutlined />, label: '效能看板' },
   { key: '/monitor', icon: <DesktopOutlined />, label: '会话监控' },
   { key: '/tickets', icon: <FileTextOutlined />, label: '升级工单' },
@@ -137,7 +134,6 @@ export default function App() {
           <Route path="/chat" element={<ChatPage />} />
           {user.role === 'admin' && (
             <>
-              <Route path="/knowledge" element={<KnowledgePage />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/monitor" element={<MonitorPage />} />
               <Route path="/tickets" element={<TicketsPage />} />

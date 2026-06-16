@@ -60,7 +60,6 @@ Go Server (Gin)
   |-- auth       登录、Token、角色权限
   |-- session    坐席池、排队、会话生命周期、WebSocket 推送
   |-- agent      Agent 注册中心、Runtime Spec、ACP 适配层
-  |-- knowledge  MCP 知识源健康检查与直接检索
   |-- feedback   用户反馈与学习笔记沉淀
   |-- handoff    转人工工单
   |-- stats      看板统计
@@ -265,12 +264,11 @@ internal/repo/migrations/
 5. 补充设置页显示与健康检查。
 6. 明确是否支持原生 resume、图片、多模态、MCP。
 
-### 新增知识源
+### Agent MCP 知识源
 
-新增知识源应优先以 MCP server 形式接入。建议约定：
+知识源当前由具体 Agent 的本地 MCP 配置管理。以 Hermes 为例，建议约定：
 
 - `name` 使用稳定机器名，如 `code-graph`、`wiki-graph`。
-- `display_name` 用于前端展示。
 - 鉴权信息不要提交到仓库。
 - 生产环境使用内网地址或服务发现，避免把本地 mock 地址写死进发布配置。
 

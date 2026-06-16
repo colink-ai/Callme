@@ -11,15 +11,14 @@ import (
 
 // Config 服务总配置
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	Database  DatabaseConfig  `yaml:"database"`
-	Agent     AgentConfig     `yaml:"agent"`
-	Auth      AuthConfig      `yaml:"auth"`
-	Session   SessionConfig   `yaml:"session"`
-	Knowledge KnowledgeConfig `yaml:"knowledge"`
-	Feedback  FeedbackConfig  `yaml:"feedback"`
-	Handoff   HandoffConfig   `yaml:"handoff"`
-	Log       LogConfig       `yaml:"log"`
+	Server   ServerConfig   `yaml:"server"`
+	Database DatabaseConfig `yaml:"database"`
+	Agent    AgentConfig    `yaml:"agent"`
+	Auth     AuthConfig     `yaml:"auth"`
+	Session  SessionConfig  `yaml:"session"`
+	Feedback FeedbackConfig `yaml:"feedback"`
+	Handoff  HandoffConfig  `yaml:"handoff"`
+	Log      LogConfig      `yaml:"log"`
 }
 
 // LogConfig 日志配置
@@ -69,23 +68,6 @@ type SessionConfig struct {
 	MaxDuration      time.Duration `yaml:"max_duration"`       // 单会话最大时长
 	MaxPerClient     int           `yaml:"max_per_client"`     // 单客户端（指纹）同时会话数
 	QueuePollSeconds int           `yaml:"queue_poll_seconds"` // 排队状态推送间隔
-}
-
-// KnowledgeConfig 知识源配置（MCP 端点）
-type KnowledgeConfig struct {
-	Sources []KnowledgeSource `yaml:"sources"`
-}
-
-// KnowledgeSource 单个知识源：代码图谱 / wiki 图谱等
-type KnowledgeSource struct {
-	Name        string            `yaml:"name"` // 标识名，如 code-graph、wiki-graph
-	DisplayName string            `yaml:"display_name"`
-	Transport   string            `yaml:"transport"` // http | stdio
-	URL         string            `yaml:"url"`       // http 端点
-	Command     string            `yaml:"command"`   // stdio 命令
-	Args        []string          `yaml:"args"`      // stdio 参数
-	Env         map[string]string `yaml:"env"`       // stdio 环境变量
-	Token       string            `yaml:"token"`     // http Bearer token
 }
 
 // FeedbackConfig 自学习蒸馏配置

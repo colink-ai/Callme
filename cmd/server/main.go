@@ -19,7 +19,6 @@ import (
 	"callme/internal/service/auth"
 	"callme/internal/service/feedback"
 	"callme/internal/service/handoff"
-	"callme/internal/service/knowledge"
 	"callme/internal/service/session"
 	"callme/internal/service/settings"
 	"callme/internal/service/stats"
@@ -54,9 +53,9 @@ func newLogger(cfg config.LogConfig) (*zap.Logger, io.Writer, error) {
 		}
 		sink = &lumberjack.Logger{
 			Filename:   cfg.Path,
-			MaxSize:    cfg.MaxSize,    // MB
+			MaxSize:    cfg.MaxSize, // MB
 			MaxBackups: cfg.MaxBackups,
-			MaxAge:     cfg.MaxAge,     // days
+			MaxAge:     cfg.MaxAge, // days
 			Compress:   cfg.Compress,
 		}
 	}
@@ -104,8 +103,7 @@ func main() {
 
 	settingsSvc := settings.NewService(store, cfg.Agent, cfg.Session, logger)
 	authSvc := auth.NewService(store, cfg.Auth.TokenTTL)
-	knowledgeSvc := knowledge.NewService(cfg.Knowledge, logger)
-	sessionMgr := session.NewManager(cfg.Session, cfg.Agent, store, settingsSvc, knowledgeSvc.MCPServerSpecs, logger)
+	sessionMgr := session.NewManager(cfg.Session, cfg.Agent, store, settingsSvc, func() []agent.MCPServerSpec { return nil }, logger)
 	feedbackSvc := feedback.NewService(store, cfg.Feedback, cfg.Agent.HermesHome, logger)
 	handoffSvc := handoff.NewService(store, cfg.Handoff, logger)
 	statsSvc := stats.NewService(store, sessionMgr.Counts)
@@ -120,17 +118,16 @@ func main() {
 	}
 
 	router := api.NewRouter(&api.Deps{
-		Store:     store,
-		Sessions:  sessionMgr,
-		Settings:  settingsSvc,
-		Auth:      authSvc,
-		Knowledge: knowledgeSvc,
-		Feedback:  feedbackSvc,
-		Handoff:   handoffSvc,
-		Stats:     statsSvc,
-		WS:        wsHandler,
-		Logger:    logger,
-		WebDist:   dist,
+		Store:    store,
+		Sessions: sessionMgr,
+		Settings: settingsSvc,
+		Auth:     authSvc,
+		Feedback: feedbackSvc,
+		Handoff:  handoffSvc,
+		Stats:    statsSvc,
+		WS:       wsHandler,
+		Logger:   logger,
+		WebDist:  dist,
 	})
 
 	// 优雅退出：结束所有会话回收 Hermes 进程

@@ -12,7 +12,6 @@ import (
 	"callme/internal/service/auth"
 	"callme/internal/service/feedback"
 	"callme/internal/service/handoff"
-	"callme/internal/service/knowledge"
 	"callme/internal/service/session"
 	"callme/internal/service/settings"
 	"callme/internal/service/stats"
@@ -24,17 +23,16 @@ import (
 
 // Deps API 依赖集合
 type Deps struct {
-	Store     *repo.Store
-	Sessions  *session.Manager
-	Settings  *settings.Service
-	Auth      *auth.Service
-	Knowledge *knowledge.Service
-	Feedback  *feedback.Service
-	Handoff   *handoff.Service
-	Stats     *stats.Service
-	WS        *ws.Handler
-	Logger    *zap.Logger
-	WebDist   string // 前端构建产物目录（为空则不挂载）
+	Store    *repo.Store
+	Sessions *session.Manager
+	Settings *settings.Service
+	Auth     *auth.Service
+	Feedback *feedback.Service
+	Handoff  *handoff.Service
+	Stats    *stats.Service
+	WS       *ws.Handler
+	Logger   *zap.Logger
+	WebDist  string // 前端构建产物目录（为空则不挂载）
 }
 
 // NewRouter 构建 Gin 路由
@@ -83,11 +81,6 @@ func NewRouter(d *Deps) *gin.Engine {
 		protected.PUT("/users/:id/role", d.adminRequired(), d.updateUserRole)
 		protected.DELETE("/users/:id", d.adminRequired(), d.deleteUser)
 
-		// 知识源
-		protected.GET("/knowledge/sources", d.adminRequired(), d.listKnowledgeSources)
-		protected.POST("/knowledge/health", d.adminRequired(), d.checkKnowledgeHealth)
-		protected.POST("/knowledge/query", d.adminRequired(), d.queryKnowledge)
-
 		// 看板
 		protected.GET("/stats/overview", d.adminRequired(), d.getStatsOverview)
 		protected.GET("/stats/daily", d.adminRequired(), d.getStatsDaily)
@@ -99,6 +92,10 @@ func NewRouter(d *Deps) *gin.Engine {
 		r.Static("/assets", d.WebDist+"/assets")
 		r.StaticFile("/favicon.svg", d.WebDist+"/favicon.svg")
 		r.NoRoute(func(c *gin.Context) {
+			if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+				c.JSON(http.StatusNotFound, gin.H{"error": "接口不存在"})
+				return
+			}
 			c.File(d.WebDist + "/index.html")
 		})
 	}
@@ -463,34 +460,6 @@ func (d *Deps) checkAgentHealth(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"healthy": true})
-}
-
-// ---------- 知识源 ----------
-
-func (d *Deps) listKnowledgeSources(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"sources": d.Knowledge.ListSources()})
-}
-
-func (d *Deps) checkKnowledgeHealth(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"sources": d.Knowledge.CheckHealth(c.Request.Context())})
-}
-
-func (d *Deps) queryKnowledge(c *gin.Context) {
-	var req struct {
-		Source string `json:"source" binding:"required"`
-		Query  string `json:"query" binding:"required"`
-		Limit  int    `json:"limit"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
-		return
-	}
-	result, err := d.Knowledge.Query(c.Request.Context(), req.Source, req.Query, req.Limit)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, result)
 }
 
 // ---------- 看板 ----------

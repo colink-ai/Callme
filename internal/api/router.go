@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"callme/internal/model"
 	"callme/internal/repo"
@@ -56,6 +57,7 @@ func NewRouter(d *Deps) *gin.Engine {
 		protected.POST("/sessions", d.createSession)
 		protected.GET("/sessions/current", d.currentSession)
 		protected.GET("/sessions/history", d.listMySessions)
+		protected.GET("/admin/sessions/closed", d.adminRequired(), d.listClosedSessions)
 		protected.GET("/sessions/:id", d.getSession)
 		protected.GET("/sessions/:id/messages", d.listMessages)
 		protected.DELETE("/sessions/:id", d.closeSession)
@@ -326,6 +328,70 @@ func (d *Deps) listLiveSessions(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+func (d *Deps) listClosedSessions(c *gin.Context) {
+	page := parsePositiveInt(c.Query("page"), 1, 1, 100000)
+	pageSize := parsePositiveInt(c.Query("pageSize"), 10, 1, 100)
+	start, err := parseOptionalTime(c.Query("start"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "开始时间格式不正确"})
+		return
+	}
+	end, err := parseOptionalTime(c.Query("end"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "结束时间格式不正确"})
+		return
+	}
+	if start != nil && end != nil && start.After(*end) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "开始时间不能晚于结束时间"})
+		return
+	}
+
+	userID := strings.TrimSpace(c.Query("userId"))
+	sessions, total, err := d.Store.ListClosedSessions(c.Request.Context(), start, end, userID, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if err := d.fillSessionUsernames(c.Request.Context(), sessions); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"sessions": sessions,
+		"total":    total,
+		"page":     page,
+		"pageSize": pageSize,
+	})
+}
+
+func parsePositiveInt(raw string, fallback, min, max int) int {
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	if n < min {
+		return min
+	}
+	if n > max {
+		return max
+	}
+	return n
+}
+
+func parseOptionalTime(raw string) (*time.Time, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
 }
 
 func sessionsFromViews(groups ...[]*session.SessionView) []*model.Session {

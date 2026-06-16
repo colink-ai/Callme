@@ -41,6 +41,13 @@ export interface SessionView extends Session {
   agentType?: string;
 }
 
+export interface PagedSessions {
+  sessions: Session[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 export type MessageRole = 'user' | 'assistant' | 'system';
 
 export interface ImageAttachment {

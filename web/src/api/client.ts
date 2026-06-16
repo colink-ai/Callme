@@ -6,6 +6,7 @@ import type {
   HotQuestion,
   LoginResult,
   Message,
+  PagedSessions,
   PoolSettings,
   Session,
   SessionView,
@@ -64,6 +65,18 @@ export const api = {
         active: r.data.active ?? [],
         queued: r.data.queued ?? [],
         closed: r.data.closed ?? [],
+      })),
+  listClosedSessions: (params: { start?: string; end?: string; userId?: string; page: number; pageSize: number }) =>
+    http
+      .get<{ sessions: Session[] | null; total: number; page: number; pageSize: number }>(
+        '/admin/sessions/closed',
+        { params },
+      )
+      .then((r): PagedSessions => ({
+        sessions: r.data.sessions ?? [],
+        total: r.data.total ?? 0,
+        page: r.data.page,
+        pageSize: r.data.pageSize,
       })),
 
   // 反馈

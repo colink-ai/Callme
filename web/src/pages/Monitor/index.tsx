@@ -1,11 +1,13 @@
 // 运营端会话监控页：活跃会话（开始时间/持续时长）、排队队列、强制结束
 import { useEffect, useState } from 'react';
-import { Button, Card, Popconfirm, Space, Table, Tag, Typography, message } from 'antd';
+import { Button, Card, DatePicker, Popconfirm, Select, Space, Table, Tag, Typography, message } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import type { Dayjs } from 'dayjs';
 import { api, apiErrorMessage } from '../../api/client';
-import type { Session, SessionView } from '../../types';
+import type { Session, SessionView, User } from '../../types';
 
+const { RangePicker } = DatePicker;
 const { Title, Text } = Typography;
 
 function fmtDuration(seconds: number): string {
@@ -23,19 +25,31 @@ function renderUser(row: Session) {
   return <Text type="secondary">未知用户</Text>;
 }
 
+function renderSessionDuration(row: Session) {
+  if (!row.startedAt || !row.closedAt) return <Text type="secondary">-</Text>;
+  const seconds = Math.max(0, dayjs(row.closedAt).diff(dayjs(row.startedAt), 'second'));
+  return <Tag color="processing">{fmtDuration(seconds)}</Tag>;
+}
+
 export default function MonitorPage() {
   const [active, setActive] = useState<SessionView[]>([]);
   const [queued, setQueued] = useState<SessionView[]>([]);
   const [closed, setClosed] = useState<Session[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [closedUserId, setClosedUserId] = useState<string | undefined>();
+  const [closedTotal, setClosedTotal] = useState(0);
+  const [closedPage, setClosedPage] = useState(1);
+  const [closedPageSize, setClosedPageSize] = useState(10);
+  const [closedRange, setClosedRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [closedLoading, setClosedLoading] = useState(false);
 
-  const load = async () => {
+  const loadLive = async () => {
     setLoading(true);
     try {
-      const data = await api.listLiveSessions(true);
+      const data = await api.listLiveSessions(false);
       setActive(data.active);
       setQueued(data.queued);
-      setClosed(data.closed);
     } catch (err) {
       message.error(apiErrorMessage(err));
     } finally {
@@ -43,17 +57,46 @@ export default function MonitorPage() {
     }
   };
 
+  const loadClosed = async () => {
+    setClosedLoading(true);
+    try {
+      const data = await api.listClosedSessions({
+        start: closedRange?.[0]?.toISOString(),
+        end: closedRange?.[1]?.toISOString(),
+        userId: closedUserId,
+        page: closedPage,
+        pageSize: closedPageSize,
+      });
+      setClosed(data.sessions);
+      setClosedTotal(data.total);
+    } catch (err) {
+      message.error(apiErrorMessage(err));
+    } finally {
+      setClosedLoading(false);
+    }
+  };
+
   useEffect(() => {
-    load();
-    const t = window.setInterval(load, 5000);
+    loadLive();
+    const t = window.setInterval(loadLive, 5000);
     return () => window.clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    api.listUsers().then(setUsers).catch(() => {
+      /* 用户筛选加载失败不影响监控主流程 */
+    });
+  }, []);
+
+  useEffect(() => {
+    loadClosed();
+  }, [closedPage, closedPageSize, closedRange, closedUserId]);
 
   const forceClose = async (id: string) => {
     try {
       await api.closeSession(id, true);
       message.success('会话已结束');
-      load();
+      await Promise.all([loadLive(), loadClosed()]);
     } catch (err) {
       message.error(apiErrorMessage(err));
     }
@@ -63,7 +106,7 @@ export default function MonitorPage() {
     <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
       <Space style={{ marginBottom: 16, justifyContent: 'space-between', width: '100%' }}>
         <Title level={4} style={{ margin: 0 }}>会话监控</Title>
-        <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => { loadLive(); loadClosed(); }} loading={loading || closedLoading}>刷新</Button>
       </Space>
 
       <Card title={`活跃会话（${active.length} 个坐席占用中）`} style={{ marginBottom: 16 }}>
@@ -133,11 +176,51 @@ export default function MonitorPage() {
         />
       </Card>
 
-      <Card title="最近结束的会话">
+      <Card
+        title="最近结束的会话"
+        extra={
+          <Space wrap>
+            <Select
+              allowClear
+              showSearch
+              placeholder="筛选用户"
+              style={{ width: 180 }}
+              value={closedUserId}
+              optionFilterProp="label"
+              options={users.map((u) => ({ value: u.id, label: u.username }))}
+              onChange={(userId) => {
+                setClosedUserId(userId);
+                setClosedPage(1);
+              }}
+            />
+            <RangePicker
+              showTime
+              allowClear
+              format="YYYY-MM-DD HH:mm"
+              value={closedRange}
+              onChange={(range) => {
+                setClosedRange(range ? [range[0], range[1]] : null);
+                setClosedPage(1);
+              }}
+            />
+          </Space>
+        }
+      >
         <Table<Session>
           rowKey="id"
           dataSource={closed}
-          pagination={{ pageSize: 10 }}
+          loading={closedLoading}
+          pagination={{
+            current: closedPage,
+            pageSize: closedPageSize,
+            total: closedTotal,
+            showSizeChanger: true,
+            showTotal: (total) => `共 ${total} 条`,
+            onChange: (page, pageSize) => {
+              setClosedPage(page);
+              setClosedPageSize(pageSize);
+            },
+          }}
           size="small"
           columns={[
             { title: '会话', dataIndex: 'id', render: (id: string) => <Text code>{id.slice(0, 8)}</Text> },
@@ -153,6 +236,7 @@ export default function MonitorPage() {
               dataIndex: 'closedAt',
               render: (t?: string) => (t ? dayjs(t).format('MM-DD HH:mm') : '-'),
             },
+            { title: '时长', render: (_, row) => renderSessionDuration(row) },
             {
               title: '结束原因',
               dataIndex: 'closeReason',

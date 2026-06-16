@@ -159,7 +159,7 @@ body,
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-right: 58px;
+  padding-right: 86px;
 }
 .history-item-meta {
   display: flex;

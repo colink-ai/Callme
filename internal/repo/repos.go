@@ -100,6 +100,58 @@ func (s *Store) ListSessionsByStatus(ctx context.Context, statuses []model.Sessi
 	return result, rows.Err()
 }
 
+func (s *Store) ListClosedSessions(ctx context.Context, start, end *time.Time, userID string, page, pageSize int) ([]*model.Session, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+
+	where := `status=?`
+	args := []any{model.SessionStatusClosed}
+	if start != nil {
+		where += ` AND closed_at >= ?`
+		args = append(args, *start)
+	}
+	if end != nil {
+		where += ` AND closed_at <= ?`
+		args = append(args, *end)
+	}
+	if userID != "" {
+		where += ` AND user_id = ?`
+		args = append(args, userID)
+	}
+
+	var total int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, pageSize, (page-1)*pageSize)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, client_id, user_id, status, created_at, started_at, closed_at, close_reason, title, agent_session_id
+		 FROM sessions
+		 WHERE `+where+`
+		 ORDER BY closed_at DESC, created_at DESC
+		 LIMIT ? OFFSET ?`, queryArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var result []*model.Session
+	for rows.Next() {
+		sess, err := scanSession(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		result = append(result, sess)
+	}
+	return result, total, rows.Err()
+}
+
 // ListSessionsByUser 列出用户历史会话
 func (s *Store) ListSessionsByUser(ctx context.Context, userID string, limit int) ([]*model.Session, error) {
 	rows, err := s.db.QueryContext(ctx,

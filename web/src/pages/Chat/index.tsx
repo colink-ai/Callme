@@ -38,6 +38,7 @@ import {
   PlayCircleOutlined,
   PictureOutlined,
   CloseOutlined,
+  CopyOutlined,
   DownOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -373,6 +374,15 @@ function HistorySidebar({
   onNew: () => void;
   onCollapse: () => void;
 }) {
+  const copySessionId = async (session: Session) => {
+    try {
+      await navigator.clipboard.writeText(session.id);
+      antMessage.success('会话 ID 已复制');
+    } catch {
+      antMessage.error('复制失败，请手动复制会话 ID');
+    }
+  };
+
   return (
     <div className="history-sidebar">
       <div className="history-sidebar-head">
@@ -403,11 +413,20 @@ function HistorySidebar({
                   <span className={`history-dot ${s.status}`} />
                   {dayjs(s.createdAt).format('MM-DD HH:mm')}
                 </div>
-                {s.status === 'closed' && (
-                  <div className="history-item-actions" onClick={(e) => e.stopPropagation()}>
-                    <Tooltip title="继续问答">
-                      <Button
-                        type="text"
+                <div className="history-item-actions" onClick={(e) => e.stopPropagation()}>
+                  <Tooltip title="复制会话 ID">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<CopyOutlined />}
+                      onClick={() => copySessionId(s)}
+                    />
+                  </Tooltip>
+                  {s.status === 'closed' && (
+                    <>
+                      <Tooltip title="继续问答">
+                        <Button
+                          type="text"
                         size="small"
                         icon={<PlayCircleOutlined />}
                         onClick={() => onContinue(s)}
@@ -425,8 +444,9 @@ function HistorySidebar({
                         <Button type="text" danger size="small" icon={<DeleteOutlined />} />
                       </Tooltip>
                     </Popconfirm>
-                  </div>
-                )}
+                    </>
+                  )}
+                </div>
               </div>
             )}
           />

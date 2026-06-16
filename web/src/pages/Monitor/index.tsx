@@ -17,6 +17,12 @@ function fmtDuration(seconds: number): string {
   return `${s}秒`;
 }
 
+function renderUser(row: Session) {
+  if (row.username) return <Text strong>{row.username}</Text>;
+  if (row.userId) return <Text type="secondary">{row.userId.slice(0, 8)}</Text>;
+  return <Text type="secondary">未知用户</Text>;
+}
+
 export default function MonitorPage() {
   const [active, setActive] = useState<SessionView[]>([]);
   const [queued, setQueued] = useState<SessionView[]>([]);
@@ -69,6 +75,7 @@ export default function MonitorPage() {
           locale={{ emptyText: '暂无活跃会话' }}
           columns={[
             { title: '会话', dataIndex: 'id', render: (id: string) => <Text code>{id.slice(0, 8)}</Text> },
+            { title: '用户', render: (_, row) => renderUser(row) },
             { title: '首问', dataIndex: 'title', ellipsis: true, render: (t: string) => t || <Text type="secondary">（尚未提问）</Text> },
             {
               title: '开始时间',
@@ -103,6 +110,7 @@ export default function MonitorPage() {
           columns={[
             { title: '位置', dataIndex: 'position', width: 70, render: (p: number) => <Tag>{p}</Tag> },
             { title: '会话', dataIndex: 'id', render: (id: string) => <Text code>{id.slice(0, 8)}</Text> },
+            { title: '用户', render: (_, row) => renderUser(row) },
             {
               title: '进入时间',
               dataIndex: 'createdAt',
@@ -133,6 +141,7 @@ export default function MonitorPage() {
           size="small"
           columns={[
             { title: '会话', dataIndex: 'id', render: (id: string) => <Text code>{id.slice(0, 8)}</Text> },
+            { title: '用户', render: (_, row) => renderUser(row) },
             { title: '首问', dataIndex: 'title', ellipsis: true },
             {
               title: '开始',

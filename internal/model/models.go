@@ -56,6 +56,7 @@ type Session struct {
 	ID             string        `json:"id"`
 	ClientID       string        `json:"clientId"` // 浏览器指纹/匿名客户端标识
 	UserID         string        `json:"userId,omitempty"`
+	Username       string        `json:"username,omitempty"` // 监控视图展示字段，不持久化到 sessions 表
 	Status         SessionStatus `json:"status"`
 	CreatedAt      time.Time     `json:"createdAt"`           // 进入系统（含排队）时间
 	StartedAt      *time.Time    `json:"startedAt,omitempty"` // 占用坐席（开始服务）时间

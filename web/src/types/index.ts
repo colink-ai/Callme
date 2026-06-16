@@ -20,6 +20,8 @@ export interface LoginResult {
 export interface Session {
   id: string;
   clientId: string;
+  userId?: string;
+  username?: string;
   status: SessionStatus;
   createdAt: string;
   startedAt?: string;

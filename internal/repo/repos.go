@@ -243,6 +243,38 @@ func (s *Store) ListUsers(ctx context.Context) ([]*model.User, error) {
 	return result, rows.Err()
 }
 
+func (s *Store) UsernamesByIDs(ctx context.Context, ids []string) (map[string]string, error) {
+	if len(ids) == 0 {
+		return map[string]string{}, nil
+	}
+	query := `SELECT id, username FROM users WHERE id IN (`
+	args := make([]any, 0, len(ids))
+	for i, id := range ids {
+		if i > 0 {
+			query += ","
+		}
+		query += "?"
+		args = append(args, id)
+	}
+	query += `)`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string, len(ids))
+	for rows.Next() {
+		var id, username string
+		if err := rows.Scan(&id, &username); err != nil {
+			return nil, err
+		}
+		result[id] = username
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) UpdateUserRole(ctx context.Context, id string, role model.UserRole) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE users SET role=?, updated_at=? WHERE id=?`, role, time.Now(), id)
 	return err

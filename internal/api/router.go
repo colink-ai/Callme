@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -310,15 +311,59 @@ func (d *Deps) continueSession(c *gin.Context) {
 
 func (d *Deps) listLiveSessions(c *gin.Context) {
 	active, queued := d.Sessions.Snapshot()
+	sessions := sessionsFromViews(active, queued)
 	resp := gin.H{"active": active, "queued": queued}
 	// 可选带最近已结束会话
 	if c.Query("include") == "closed" {
 		closed, err := d.Store.ListSessionsByStatus(c.Request.Context(), []model.SessionStatus{model.SessionStatusClosed}, 50)
 		if err == nil {
+			sessions = append(sessions, closed...)
 			resp["closed"] = closed
 		}
 	}
+	if err := d.fillSessionUsernames(c.Request.Context(), sessions); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, resp)
+}
+
+func sessionsFromViews(groups ...[]*session.SessionView) []*model.Session {
+	var result []*model.Session
+	for _, views := range groups {
+		for _, view := range views {
+			if view != nil && view.Session != nil {
+				result = append(result, view.Session)
+			}
+		}
+	}
+	return result
+}
+
+func (d *Deps) fillSessionUsernames(ctx context.Context, sessions []*model.Session) error {
+	seen := make(map[string]struct{})
+	ids := make([]string, 0, len(sessions))
+	for _, sess := range sessions {
+		if sess == nil || sess.UserID == "" {
+			continue
+		}
+		if _, ok := seen[sess.UserID]; ok {
+			continue
+		}
+		seen[sess.UserID] = struct{}{}
+		ids = append(ids, sess.UserID)
+	}
+	usernames, err := d.Store.UsernamesByIDs(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for _, sess := range sessions {
+		if sess == nil || sess.UserID == "" {
+			continue
+		}
+		sess.Username = usernames[sess.UserID]
+	}
+	return nil
 }
 
 func (d *Deps) listUsers(c *gin.Context) {

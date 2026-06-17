@@ -54,7 +54,7 @@ type AgentConfig struct {
 	DefaultModel string `yaml:"default_model"` // 兼容旧配置；新部署请在设置页配置
 	APIURL       string `yaml:"api_url"`       // 兼容旧配置；新部署请在设置页配置
 	APIToken     string `yaml:"api_token"`     // 兼容旧配置；新部署请在设置页配置
-	HermesHome   string `yaml:"hermes_home"`   // 共享持久化 HERMES_HOME（自学习记忆所在）
+	HermesHome   string `yaml:"hermes_home"`   // Callme 管理的 HERMES_HOME（正式知识 + Hermes 自学习审计）
 	WorkDir      string `yaml:"work_dir"`      // 会话工作目录根
 	SystemPrompt string `yaml:"system_prompt"` // 兼容旧配置；新部署请在设置页配置
 }
@@ -73,7 +73,8 @@ type SessionConfig struct {
 // FeedbackConfig 自学习蒸馏配置
 type FeedbackConfig struct {
 	DistillInterval time.Duration `yaml:"distill_interval"`  // 蒸馏任务周期
-	NotesMaxEntries int           `yaml:"notes_max_entries"` // 学习笔记最大条数
+	AuditInterval   time.Duration `yaml:"audit_interval"`    // Hermes 自学习审计周期
+	NotesMaxEntries int           `yaml:"notes_max_entries"` // 兼容旧配置；正式知识现由审批流发布
 }
 
 // HandoffConfig 人工接管/工单外发配置
@@ -117,7 +118,8 @@ func defaultConfig() *Config {
 			TokenTTL: 7 * 24 * time.Hour,
 		},
 		Feedback: FeedbackConfig{
-			DistillInterval: 10 * time.Minute,
+			DistillInterval: time.Hour,
+			AuditInterval:   10 * time.Minute,
 			NotesMaxEntries: 200,
 		},
 		Log: LogConfig{
@@ -167,7 +169,10 @@ func (c *Config) applyDefaults() {
 		c.Session.QueuePollSeconds = 5
 	}
 	if c.Feedback.DistillInterval <= 0 {
-		c.Feedback.DistillInterval = 10 * time.Minute
+		c.Feedback.DistillInterval = time.Hour
+	}
+	if c.Feedback.AuditInterval <= 0 {
+		c.Feedback.AuditInterval = 10 * time.Minute
 	}
 	if c.Feedback.NotesMaxEntries <= 0 {
 		c.Feedback.NotesMaxEntries = 200

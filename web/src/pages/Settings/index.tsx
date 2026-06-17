@@ -1,4 +1,4 @@
-// 设置页：模型切换（Hermes 配置）、坐席容量、学习笔记查看
+// 设置页：模型切换（Hermes 配置）、坐席容量
 import { useEffect, useState } from 'react';
 import {
   Button,
@@ -6,25 +6,22 @@ import {
   Form,
   Input,
   InputNumber,
-  Modal,
   Select,
   Space,
   Typography,
   message,
 } from 'antd';
-import { ApiOutlined, BookOutlined } from '@ant-design/icons';
+import { ApiOutlined } from '@ant-design/icons';
 import { api, apiErrorMessage } from '../../api/client';
 import type { AgentSettings, PoolSettings } from '../../types';
 
-const { Title, Text } = Typography;
+const { Title } = Typography;
 
 export default function SettingsPage() {
   const [agentForm] = Form.useForm<AgentSettings>();
   const [poolForm] = Form.useForm<PoolSettings>();
   const [types, setTypes] = useState<{ type: string; name: string; defaultPath?: string }[]>([]);
   const [agentChecking, setAgentChecking] = useState(false);
-  const [notesOpen, setNotesOpen] = useState(false);
-  const [notes, setNotes] = useState('');
 
   useEffect(() => {
     (async () => {
@@ -74,15 +71,6 @@ export default function SettingsPage() {
       message.error(apiErrorMessage(err));
     } finally {
       setAgentChecking(false);
-    }
-  };
-
-  const showNotes = async () => {
-    try {
-      setNotes(await api.getLearningNotes());
-      setNotesOpen(true);
-    } catch (err) {
-      message.error(apiErrorMessage(err));
     }
   };
 
@@ -138,8 +126,12 @@ export default function SettingsPage() {
               <Input.Password placeholder="留空或保持掩码则不修改" />
             </Form.Item>
           </Space>
-          <Form.Item label="客服系统提示词" name="systemPrompt">
-            <Input.TextArea rows={5} placeholder="定义客服的角色、知识检索策略与转人工规则…" />
+          <Form.Item
+            label="客服系统提示词"
+            name="systemPrompt"
+            tooltip="建议加入自学习约束：单次会话结论不得泛化为全局规则；业务事实须走候选资产、经人工审批后才生效；可参考 HERMES_HOME/approved_knowledge.md 中已审批的正式知识。"
+          >
+            <Input.TextArea rows={6} placeholder="定义客服角色、知识检索策略、转人工规则；并约束：业务事实须经审批沉淀、单次会话结论不得泛化…" />
           </Form.Item>
           <Button type="primary" onClick={saveAgent}>保存模型配置</Button>
         </Form>
@@ -161,27 +153,6 @@ export default function SettingsPage() {
           <Button type="primary" onClick={savePool}>保存</Button>
         </Form>
       </Card>
-
-      <Card title="自学习">
-        <Space direction="vertical">
-          <Text type="secondary">
-            用户反馈（点踩 + 纠错）会被定时蒸馏为学习笔记写入共享 HERMES_HOME，与 Hermes 自身记忆共同累积，使客服越用越聪明。
-          </Text>
-          <Button icon={<BookOutlined />} onClick={showNotes}>查看学习笔记</Button>
-        </Space>
-      </Card>
-
-      <Modal
-        title="学习笔记（learning_notes.md）"
-        open={notesOpen}
-        footer={null}
-        width={720}
-        onCancel={() => setNotesOpen(false)}
-      >
-        <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 480, overflow: 'auto', fontSize: 13 }}>
-          {notes || '（暂无学习笔记，提交带纠错的点踩反馈后由蒸馏任务生成）'}
-        </pre>
-      </Modal>
     </div>
   );
 }

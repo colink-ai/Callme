@@ -1,12 +1,13 @@
 // 与后端 internal/model、internal/service/session 对齐的类型定义
 
 export type SessionStatus = 'queued' | 'active' | 'closed';
-export type UserRole = 'normal' | 'vip' | 'admin';
+export type UserRole = 'normal' | 'vip' | 'knowledge_expert' | 'admin';
 
 export interface User {
   id: string;
   username: string;
   role: UserRole;
+  roles: UserRole[];
   createdAt: string;
   updatedAt: string;
 }
@@ -130,6 +131,64 @@ export interface Ticket {
   transcript: string;
   status: 'open' | 'notified' | 'failed';
   createdAt: string;
+}
+
+export type CandidateAssetType = 'faq' | 'wiki';
+export type CandidateAssetStatus = 'pending' | 'approved' | 'rejected';
+
+export interface CandidateAsset {
+  id: string;
+  assetType: CandidateAssetType;
+  title: string;
+  question?: string;
+  content: string;
+  evidence?: string;
+  sourceSessionId?: string;
+  sourceFeedbackId?: string;
+  confidence: number;
+  status: CandidateAssetStatus;
+  reviewer?: string;
+  reviewNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type HermesLearningAssetType = 'skill' | 'memory';
+export type HermesLearningChangeType = 'new' | 'modified' | 'deleted';
+export type HermesLearningStatus =
+  | 'pending_review'
+  | 'kept'
+  | 'modified'
+  | 'deleted'
+  | 'converted'
+  | 'prohibited_as_evidence';
+
+export interface HermesLearningAsset {
+  id: string;
+  assetType: HermesLearningAssetType;
+  path: string;
+  contentHash: string;
+  content?: string;
+  changeType: HermesLearningChangeType;
+  riskFlags?: string;
+  status: HermesLearningStatus;
+  reviewer?: string;
+  reviewNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type LearningJobStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
+
+export interface LearningJob {
+  id: string;
+  source: string;
+  status: LearningJobStatus;
+  inputSessions: number;
+  outputAssets: number;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
 }
 
 export interface AgentSettings {

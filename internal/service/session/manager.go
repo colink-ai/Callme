@@ -187,7 +187,8 @@ func (m *Manager) ContinueSession(ctx context.Context, user *model.User, source 
 		m.mu.Unlock()
 		return nil, ErrClientBusy
 	}
-	if user.Role != model.UserRoleVIP && len(m.queue) >= pool.MaxQueue {
+	isVIP := user.HasRole(model.UserRoleVIP)
+	if !isVIP && len(m.queue) >= pool.MaxQueue {
 		m.mu.Unlock()
 		return nil, ErrQueueFull
 	}
@@ -200,7 +201,7 @@ func (m *Manager) ContinueSession(ctx context.Context, user *model.User, source 
 	source.CloseReason = ""
 	l := &live{sess: source, lastActivity: now}
 
-	canActivate := user.Role == model.UserRoleVIP || len(m.active) < pool.MaxActive
+	canActivate := isVIP || len(m.active) < pool.MaxActive
 	if canActivate {
 		m.active[source.ID] = l
 	} else {
@@ -255,7 +256,8 @@ func (m *Manager) createSession(ctx context.Context, user *model.User, title str
 		m.mu.Unlock()
 		return nil, ErrClientBusy
 	}
-	if user.Role != model.UserRoleVIP && len(m.queue) >= pool.MaxQueue {
+	isVIP := user.HasRole(model.UserRoleVIP)
+	if !isVIP && len(m.queue) >= pool.MaxQueue {
 		m.mu.Unlock()
 		return nil, ErrQueueFull
 	}
@@ -271,7 +273,7 @@ func (m *Manager) createSession(ctx context.Context, user *model.User, title str
 	}
 	l := &live{sess: sess, lastActivity: now}
 
-	canActivate := user.Role == model.UserRoleVIP || len(m.active) < pool.MaxActive
+	canActivate := isVIP || len(m.active) < pool.MaxActive
 	if canActivate {
 		// 先占座，随后同步拉起 Agent；启动失败会释放坐席。
 		m.active[sess.ID] = l

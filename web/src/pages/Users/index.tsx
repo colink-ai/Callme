@@ -11,12 +11,14 @@ const { Title } = Typography;
 const roleLabels: Record<UserRole, string> = {
   normal: '普通用户',
   vip: 'VIP 用户',
+  knowledge_expert: '知识专家',
   admin: '管理员',
 };
 
 const roleColors: Record<UserRole, string> = {
   normal: 'default',
   vip: 'gold',
+  knowledge_expert: 'cyan',
   admin: 'red',
 };
 
@@ -36,9 +38,9 @@ export default function UsersPage() {
     load();
   }, []);
 
-  const updateRole = async (id: string, role: UserRole) => {
+  const updateRole = async (id: string, roles: UserRole[]) => {
     try {
-      await api.updateUserRole(id, role);
+      await api.updateUserRole(id, roles);
       message.success('角色已更新');
       await load();
     } catch (err) {
@@ -67,7 +69,10 @@ export default function UsersPage() {
           {
             title: '角色',
             dataIndex: 'role',
-            render: (role: UserRole) => <Tag color={roleColors[role]}>{roleLabels[role]}</Tag>,
+            render: (_: UserRole, record) => {
+              const roles = record.roles?.length ? record.roles : [record.role];
+              return roles.map((role) => <Tag key={role} color={roleColors[role]}>{roleLabels[role]}</Tag>);
+            },
           },
           { title: '注册时间', dataIndex: 'createdAt', render: (v) => dayjs(v).format('YYYY-MM-DD HH:mm') },
           {
@@ -75,12 +80,14 @@ export default function UsersPage() {
             render: (_, record) => (
               <Space>
                 <Select
-                  value={record.role}
-                  style={{ width: 140 }}
-                  onChange={(role) => updateRole(record.id, role)}
+                  mode="multiple"
+                  value={record.roles?.length ? record.roles : [record.role]}
+                  style={{ width: 240 }}
+                  onChange={(roles) => updateRole(record.id, roles)}
                   options={[
                     { label: '普通用户', value: 'normal' },
                     { label: 'VIP 用户', value: 'vip' },
+                    { label: '知识专家', value: 'knowledge_expert' },
                     { label: '管理员', value: 'admin' },
                   ]}
                 />

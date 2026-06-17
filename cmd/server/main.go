@@ -104,7 +104,7 @@ func main() {
 	settingsSvc := settings.NewService(store, cfg.Agent, cfg.Session, logger)
 	authSvc := auth.NewService(store, cfg.Auth.TokenTTL)
 	sessionMgr := session.NewManager(cfg.Session, cfg.Agent, store, settingsSvc, func() []agent.MCPServerSpec { return nil }, logger)
-	feedbackSvc := feedback.NewService(store, cfg.Feedback, cfg.Agent.HermesHome, logger)
+	feedbackSvc := feedback.NewService(store, cfg.Feedback, cfg.Agent.HermesHome, settingsSvc.AgentSpec, logger)
 	handoffSvc := handoff.NewService(store, cfg.Handoff, logger)
 	statsSvc := stats.NewService(store, sessionMgr.Counts)
 	wsHandler := ws.NewHandler(sessionMgr, authSvc, store, logger)

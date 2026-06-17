@@ -27,6 +27,13 @@ type AdapterConfig struct {
 	// Hermes 通过 config.yaml 的 model.default 设置模型，set_model 既冗余又会报 -32603，
 	// 因此默认 false（跳过），省掉一次失败的握手往返。
 	ConfigureModelViaACP bool
+	// OnSessionStart 在 Agent 进程启动且 ACP 握手完成之前调用。
+	// 插件可在此 snapshot Agent 持久化目录现状，便于会话结束时识别新增产物。
+	OnSessionStart func(req *agent.SessionRequest)
+	// OnSessionEnd 在会话结束（StopSession 或 teardown）后调用。
+	// 插件可在此把会话期 Agent 自动生成的 skill/memory 等产物隔离到 quarantine，
+	// 避免它们污染下一次会话的回答链路（自学习沙箱原则）。
+	OnSessionEnd func(req *agent.SessionRequest)
 }
 
 // maxStderrSize stderr 缓冲上限（64KB），防止异常输出撑爆内存
@@ -46,6 +53,7 @@ type acpSession struct {
 	nativeResume bool
 	stderrOutput strings.Builder
 	onChunk      func(agent.Chunk) // 当前轮的流式回调（Prompt 期间有效）
+	req          *agent.SessionRequest // 保留以便会话结束时插件回调
 	mu           sync.Mutex
 }
 
@@ -79,6 +87,11 @@ func (a *BaseAdapter) StartSession(ctx context.Context, sessionID string, req *a
 		return fmt.Errorf("ACP: session already exists: %s", sessionID)
 	}
 	a.mu.Unlock()
+
+	// 在进程拉起前给插件一次回调机会（用于自学习沙箱：snapshot 现有 skill/memory 等）
+	if a.Config.OnSessionStart != nil {
+		a.Config.OnSessionStart(req)
+	}
 
 	cliPath := req.Spec.CliPath
 	args := a.Config.BuildArgs(req)
@@ -122,6 +135,7 @@ func (a *BaseAdapter) StartSession(ctx context.Context, sessionID string, req *a
 		cmd:    cmd,
 		cancel: sessionCancel,
 		status: agent.SessionStatusRunning,
+		req:    req,
 	}
 
 	// stderr 消费（诊断用）
@@ -475,6 +489,10 @@ func (a *BaseAdapter) teardown(session *acpSession) {
 				<-done
 			}
 		}
+	}
+	// 进程退出后回调插件：用于自学习沙箱隔离 Agent 自动写入的产物
+	if a.Config.OnSessionEnd != nil && session.req != nil {
+		a.Config.OnSessionEnd(session.req)
 	}
 }
 

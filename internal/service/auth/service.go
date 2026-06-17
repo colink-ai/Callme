@@ -68,6 +68,7 @@ func (s *Service) Register(ctx context.Context, username, password string) (*Log
 		Username:     username,
 		PasswordHash: hashPassword(password),
 		Role:         role,
+		Roles:        []model.UserRole{role},
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -121,10 +122,41 @@ func (s *Service) ListUsers(ctx context.Context) ([]*model.User, error) {
 }
 
 func (s *Service) UpdateRole(ctx context.Context, id string, role model.UserRole) error {
-	if role != model.UserRoleNormal && role != model.UserRoleVIP && role != model.UserRoleAdmin {
-		return errors.New("角色无效")
+	return s.UpdateRoles(ctx, id, []model.UserRole{role})
+}
+
+func (s *Service) UpdateRoles(ctx context.Context, id string, roles []model.UserRole) error {
+	for _, role := range roles {
+		if !model.IsValidUserRole(role) {
+			return errors.New("角色无效")
+		}
 	}
-	return s.store.UpdateUserRole(ctx, id, role)
+	roles = model.NormalizeRoles(roles)
+	if !containsRole(roles, model.UserRoleAdmin) {
+		u, err := s.store.GetUser(ctx, id)
+		if err != nil {
+			return err
+		}
+		if u.HasRole(model.UserRoleAdmin) {
+			adminCount, err := s.store.CountUsersByRole(ctx, model.UserRoleAdmin)
+			if err != nil {
+				return err
+			}
+			if adminCount <= 1 {
+				return ErrLastAdmin
+			}
+		}
+	}
+	return s.store.UpdateUserRoles(ctx, id, roles)
+}
+
+func containsRole(roles []model.UserRole, target model.UserRole) bool {
+	for _, role := range roles {
+		if role == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) DeleteUser(ctx context.Context, actorID, id string) error {
@@ -138,7 +170,7 @@ func (s *Service) DeleteUser(ctx context.Context, actorID, id string) error {
 	if err != nil {
 		return err
 	}
-	if u.Role == model.UserRoleAdmin {
+	if u.HasRole(model.UserRoleAdmin) {
 		adminCount, err := s.store.CountUsersByRole(ctx, model.UserRoleAdmin)
 		if err != nil {
 			return err

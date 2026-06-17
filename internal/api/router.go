@@ -27,15 +27,15 @@ import (
 type Deps struct {
 	Store    *repo.Store
 	Sessions *session.Manager
-	Settings  *settings.Service
-	Auth      *auth.Service
-	Feedback   *feedback.Service
-	Handoff    *handoff.Service
-	Stats      *stats.Service
-	WS         *ws.Handler
-	Logger     *zap.Logger
-	WebDist    string // 前端构建产物目录（为空则不挂载）
-	Version    string // 应用版本号
+	Settings *settings.Service
+	Auth     *auth.Service
+	Feedback *feedback.Service
+	Handoff  *handoff.Service
+	Stats    *stats.Service
+	WS       *ws.Handler
+	Logger   *zap.Logger
+	WebDist  string // 前端构建产物目录（为空则不挂载）
+	Version  string // 应用版本号
 }
 
 // NewRouter 构建 Gin 路由
@@ -68,7 +68,15 @@ func NewRouter(d *Deps) *gin.Engine {
 
 		// 反馈（自学习闭环入口）
 		protected.POST("/feedback", d.submitFeedback)
-		protected.GET("/learning/notes", d.adminRequired(), d.getLearningNotes)
+		protected.GET("/learning/notes", d.knowledgeRequired(), d.getLearningNotes)
+		// 自学习沙箱：候选资产审批（管理员 / 知识专家）
+		protected.GET("/learning/candidates", d.knowledgeRequired(), d.listCandidates)
+		protected.GET("/learning/hermes-assets", d.knowledgeRequired(), d.listHermesLearningAssets)
+		protected.GET("/learning/jobs", d.knowledgeRequired(), d.listLearningJobs)
+		protected.POST("/learning/jobs/run", d.knowledgeRequired(), d.runLearningJob)
+		protected.POST("/learning/manual-drafts", d.knowledgeRequired(), d.createManualKnowledgeDraft)
+		protected.PUT("/learning/candidates/:id", d.knowledgeRequired(), d.updateCandidate)
+		protected.POST("/learning/candidates/:id/review", d.knowledgeRequired(), d.reviewCandidate)
 
 		// 转人工/工单
 		protected.POST("/sessions/:id/handoff", d.createHandoff)
@@ -121,8 +129,19 @@ func (d *Deps) authRequired() gin.HandlerFunc {
 
 func (d *Deps) adminRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if currentUser(c).Role != model.UserRoleAdmin {
+		if !currentUser(c).HasRole(model.UserRoleAdmin) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "仅管理员可访问"})
+			return
+		}
+		c.Next()
+	}
+}
+
+func (d *Deps) knowledgeRequired() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user := currentUser(c)
+		if !user.HasRole(model.UserRoleAdmin) && !user.HasRole(model.UserRoleKnowledgeExpert) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "仅管理员或知识专家可访问"})
 			return
 		}
 		c.Next()
@@ -150,7 +169,7 @@ func (d *Deps) requireSessionAccess(c *gin.Context, sessionID string) (*model.Se
 		return nil, false
 	}
 	user := currentUser(c)
-	if user.Role != model.UserRoleAdmin && sess.UserID != user.ID {
+	if !user.HasRole(model.UserRoleAdmin) && sess.UserID != user.ID {
 		c.JSON(http.StatusForbidden, gin.H{"error": "无权限访问该会话"})
 		return nil, false
 	}
@@ -444,13 +463,17 @@ func (d *Deps) listUsers(c *gin.Context) {
 
 func (d *Deps) updateUserRole(c *gin.Context) {
 	var req struct {
-		Role model.UserRole `json:"role"`
+		Role  model.UserRole   `json:"role"`
+		Roles []model.UserRole `json:"roles"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	if err := d.Auth.UpdateRole(c.Request.Context(), c.Param("id"), req.Role); err != nil {
+	if len(req.Roles) == 0 && req.Role != "" {
+		req.Roles = []model.UserRole{req.Role}
+	}
+	if err := d.Auth.UpdateRoles(c.Request.Context(), c.Param("id"), req.Roles); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -489,7 +512,90 @@ func (d *Deps) submitFeedback(c *gin.Context) {
 }
 
 func (d *Deps) getLearningNotes(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"notes": d.Feedback.ReadNotes()})
+	// 正式知识（审批通过后发布，生产 Agent 只读）
+	c.JSON(http.StatusOK, gin.H{"notes": d.Feedback.ReadApproved()})
+}
+
+func (d *Deps) listCandidates(c *gin.Context) {
+	status := model.CandidateAssetStatus(c.Query("status"))
+	items, err := d.Feedback.ListCandidates(c.Request.Context(), status)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"candidates": items})
+}
+
+func (d *Deps) listHermesLearningAssets(c *gin.Context) {
+	status := model.HermesLearningStatus(c.Query("status"))
+	items, err := d.Feedback.ListHermesLearningAssets(c.Request.Context(), status)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"assets": items})
+}
+
+func (d *Deps) listLearningJobs(c *gin.Context) {
+	items, err := d.Feedback.ListLearningJobs(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"jobs": items})
+}
+
+func (d *Deps) runLearningJob(c *gin.Context) {
+	if err := d.Feedback.RunLearningJobNow(c.Request.Context()); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (d *Deps) createManualKnowledgeDraft(c *gin.Context) {
+	var req feedback.ManualDraftRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	cand, err := d.Feedback.CreateManualDraft(c.Request.Context(), req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, cand)
+}
+
+func (d *Deps) updateCandidate(c *gin.Context) {
+	var req model.CandidateAsset
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	cand, err := d.Feedback.UpdateCandidate(c.Request.Context(), c.Param("id"), &req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, cand)
+}
+
+func (d *Deps) reviewCandidate(c *gin.Context) {
+	var req struct {
+		Approve bool   `json:"approve"`
+		Note    string `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	cand, err := d.Feedback.ReviewCandidate(c.Request.Context(), c.Param("id"), req.Approve, currentUser(c).Username, req.Note)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, cand)
 }
 
 // ---------- 工单 ----------

@@ -3,23 +3,81 @@ package model
 
 import "time"
 
-// UserRole 用户角色：普通用户 / VIP / 管理员
+// UserRole 用户角色：普通用户 / VIP / 知识专家 / 管理员
 type UserRole string
 
 const (
-	UserRoleNormal UserRole = "normal"
-	UserRoleVIP    UserRole = "vip"
-	UserRoleAdmin  UserRole = "admin"
+	UserRoleNormal          UserRole = "normal"
+	UserRoleVIP             UserRole = "vip"
+	UserRoleKnowledgeExpert UserRole = "knowledge_expert"
+	UserRoleAdmin           UserRole = "admin"
 )
 
 // User 登录用户
 type User struct {
-	ID           string    `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"-"`
-	Role         UserRole  `json:"role"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID           string     `json:"id"`
+	Username     string     `json:"username"`
+	PasswordHash string     `json:"-"`
+	Role         UserRole   `json:"role"`  // 兼容旧前端/旧接口的主角色
+	Roles        []UserRole `json:"roles"` // 新权限模型：一个用户可拥有多个角色
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
+}
+
+// HasRole 判断用户是否具备某角色；兼容只有 Role 的旧数据。
+func (u *User) HasRole(role UserRole) bool {
+	if u == nil {
+		return false
+	}
+	if u.Role == role {
+		return true
+	}
+	for _, r := range u.Roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
+}
+
+// NormalizeRoles 去重并保证至少有普通用户角色。
+func NormalizeRoles(roles []UserRole) []UserRole {
+	seen := map[UserRole]struct{}{}
+	out := make([]UserRole, 0, len(roles))
+	for _, role := range roles {
+		if !IsValidUserRole(role) {
+			continue
+		}
+		if _, ok := seen[role]; ok {
+			continue
+		}
+		seen[role] = struct{}{}
+		out = append(out, role)
+	}
+	if len(out) == 0 {
+		out = append(out, UserRoleNormal)
+	}
+	return out
+}
+
+// PrimaryRole 返回用于兼容旧 role 字段的主角色。
+func PrimaryRole(roles []UserRole) UserRole {
+	roles = NormalizeRoles(roles)
+	for _, preferred := range []UserRole{UserRoleAdmin, UserRoleKnowledgeExpert, UserRoleVIP, UserRoleNormal} {
+		for _, role := range roles {
+			if role == preferred {
+				return role
+			}
+		}
+	}
+	return UserRoleNormal
+}
+
+func IsValidUserRole(role UserRole) bool {
+	return role == UserRoleNormal ||
+		role == UserRoleVIP ||
+		role == UserRoleKnowledgeExpert ||
+		role == UserRoleAdmin
 }
 
 // AuthToken 服务端登录态
@@ -147,6 +205,109 @@ type Ticket struct {
 	Transcript string       `json:"transcript"` // 会话上下文包（外发给下游）
 	Status     TicketStatus `json:"status"`
 	CreatedAt  time.Time    `json:"createdAt"`
+}
+
+// CandidateAssetType 候选资产类型
+type CandidateAssetType string
+
+const (
+	CandidateAssetFAQ  CandidateAssetType = "faq"  // 高频标准问答
+	CandidateAssetWiki CandidateAssetType = "wiki" // 稳定知识/说明
+)
+
+// CandidateAssetStatus 候选资产审批状态
+type CandidateAssetStatus string
+
+const (
+	CandidateStatusPending  CandidateAssetStatus = "pending"  // 待审批
+	CandidateStatusApproved CandidateAssetStatus = "approved" // 已通过并发布
+	CandidateStatusRejected CandidateAssetStatus = "rejected" // 已拒绝
+)
+
+// CandidateAsset 候选知识资产（自学习沙箱产物，审批后才进入正式知识）
+type CandidateAsset struct {
+	ID               string               `json:"id"`
+	AssetType        CandidateAssetType   `json:"assetType"`
+	Title            string               `json:"title"`
+	Question         string               `json:"question,omitempty"`
+	Content          string               `json:"content"`
+	Evidence         string               `json:"evidence,omitempty"` // JSON：来源会话/消息摘要/纠错
+	SourceSessionID  string               `json:"sourceSessionId,omitempty"`
+	SourceFeedbackID string               `json:"sourceFeedbackId,omitempty"`
+	Confidence       float64              `json:"confidence"`
+	Status           CandidateAssetStatus `json:"status"`
+	Reviewer         string               `json:"reviewer,omitempty"`
+	ReviewNote       string               `json:"reviewNote,omitempty"`
+	CreatedAt        time.Time            `json:"createdAt"`
+	UpdatedAt        time.Time            `json:"updatedAt"`
+}
+
+// HermesLearningAssetType Hermes 自学习资产类型
+type HermesLearningAssetType string
+
+const (
+	HermesLearningAssetSkill  HermesLearningAssetType = "skill"
+	HermesLearningAssetMemory HermesLearningAssetType = "memory"
+)
+
+// HermesLearningChangeType Hermes 自学习资产变更类型
+type HermesLearningChangeType string
+
+const (
+	HermesLearningChangeNew      HermesLearningChangeType = "new"
+	HermesLearningChangeModified HermesLearningChangeType = "modified"
+	HermesLearningChangeDeleted  HermesLearningChangeType = "deleted"
+)
+
+// HermesLearningStatus Hermes 自学习审计状态
+type HermesLearningStatus string
+
+const (
+	HermesLearningStatusPendingReview        HermesLearningStatus = "pending_review"
+	HermesLearningStatusKept                 HermesLearningStatus = "kept"
+	HermesLearningStatusModified             HermesLearningStatus = "modified"
+	HermesLearningStatusDeleted              HermesLearningStatus = "deleted"
+	HermesLearningStatusConverted            HermesLearningStatus = "converted"
+	HermesLearningStatusProhibitedAsEvidence HermesLearningStatus = "prohibited_as_evidence"
+)
+
+// HermesLearningAsset Hermes 自学习审计记录。
+// 记录 Hermes 在 skills / memories 中新增、修改、删除的资产，供管理员审计。
+type HermesLearningAsset struct {
+	ID          string                   `json:"id"`
+	AssetType   HermesLearningAssetType  `json:"assetType"`
+	Path        string                   `json:"path"`
+	ContentHash string                   `json:"contentHash"`
+	Content     string                   `json:"content,omitempty"`
+	ChangeType  HermesLearningChangeType `json:"changeType"`
+	RiskFlags   string                   `json:"riskFlags,omitempty"` // JSON array
+	Status      HermesLearningStatus     `json:"status"`
+	Reviewer    string                   `json:"reviewer,omitempty"`
+	ReviewNote  string                   `json:"reviewNote,omitempty"`
+	CreatedAt   time.Time                `json:"createdAt"`
+	UpdatedAt   time.Time                `json:"updatedAt"`
+}
+
+// LearningJobStatus AI 学习任务状态
+type LearningJobStatus string
+
+const (
+	LearningJobStatusRunning   LearningJobStatus = "running"
+	LearningJobStatusSucceeded LearningJobStatus = "succeeded"
+	LearningJobStatusFailed    LearningJobStatus = "failed"
+	LearningJobStatusSkipped   LearningJobStatus = "skipped"
+)
+
+// LearningJob AI 自动挖掘历史会话并提出候选知识建议的执行记录。
+type LearningJob struct {
+	ID            string            `json:"id"`
+	Source        string            `json:"source"`
+	Status        LearningJobStatus `json:"status"`
+	InputSessions int               `json:"inputSessions"`
+	OutputAssets  int               `json:"outputAssets"`
+	Error         string            `json:"error,omitempty"`
+	StartedAt     time.Time         `json:"startedAt"`
+	FinishedAt    *time.Time        `json:"finishedAt,omitempty"`
 }
 
 // AgentSettings 运行时 Agent 配置（持久化在 DB，可在 Settings 页修改，覆盖 config.yaml 默认值）

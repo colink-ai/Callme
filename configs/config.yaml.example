@@ -10,7 +10,7 @@ database:
   dsn: data/callme.db
 
 agent:
-  hermes_home: data/hermes-home # Hermes 持久化目录：配置、记忆、学习笔记
+  hermes_home: data/hermes-home # Hermes 持久化目录：配置、记忆、审批后的正式知识 approved_knowledge.md
   work_dir: data/workdir        # 会话工作目录根
 
 auth:
@@ -23,7 +23,8 @@ session:
   max_per_client: 1
 
 feedback:
-  distill_interval: 10m
+  distill_interval: 1h
+  audit_interval: 10m
   notes_max_entries: 200
 
 handoff:

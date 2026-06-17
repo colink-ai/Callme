@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"callme/internal/model"
@@ -54,8 +55,8 @@ func (s *Store) CloseUnfinishedSessions(ctx context.Context, reason model.CloseR
 	now := time.Now()
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE sessions
-		 SET status=?, closed_at=?, close_reason=?
-		 WHERE status != ?`,
+	 SET status=?, closed_at=?, close_reason=?
+	 WHERE status != ?`,
 		model.SessionStatusClosed, now, reason, model.SessionStatusClosed)
 	return err
 }
@@ -249,37 +250,47 @@ func scanSession(r rowScanner) (*model.Session, error) {
 // ---------- users / auth ----------
 
 func (s *Store) CreateUser(ctx context.Context, u *model.User) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (id, username, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		u.ID, u.Username, u.PasswordHash, u.Role, u.CreatedAt, u.UpdatedAt)
+	u.Roles = model.NormalizeRoles(append(u.Roles, u.Role))
+	u.Role = model.PrimaryRole(u.Roles)
+	rolesJSON, err := json.Marshal(u.Roles)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO users (id, username, password_hash, role, roles, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.Username, u.PasswordHash, u.Role, string(rolesJSON), u.CreatedAt, u.UpdatedAt)
 	return err
 }
 
 func (s *Store) GetUser(ctx context.Context, id string) (*model.User, error) {
 	var u model.User
+	var roles string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, role, created_at, updated_at FROM users WHERE id=?`, id).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt, &u.UpdatedAt)
+		`SELECT id, username, password_hash, role, roles, created_at, updated_at FROM users WHERE id=?`, id).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &roles, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
+	u.Roles = decodeUserRoles(u.Role, roles)
 	return &u, nil
 }
 
 func (s *Store) GetUserByUsername(ctx context.Context, username string) (*model.User, error) {
 	var u model.User
+	var roles string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, role, created_at, updated_at FROM users WHERE username=?`, username).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt, &u.UpdatedAt)
+		`SELECT id, username, password_hash, role, roles, created_at, updated_at FROM users WHERE username=?`, username).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &roles, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
+	u.Roles = decodeUserRoles(u.Role, roles)
 	return &u, nil
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]*model.User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, role, created_at, updated_at FROM users ORDER BY created_at ASC`)
+		`SELECT id, username, password_hash, role, roles, created_at, updated_at FROM users ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -287,9 +298,11 @@ func (s *Store) ListUsers(ctx context.Context) ([]*model.User, error) {
 	var result []*model.User
 	for rows.Next() {
 		var u model.User
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		var roles string
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &roles, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
+		u.Roles = decodeUserRoles(u.Role, roles)
 		result = append(result, &u)
 	}
 	return result, rows.Err()
@@ -328,14 +341,40 @@ func (s *Store) UsernamesByIDs(ctx context.Context, ids []string) (map[string]st
 }
 
 func (s *Store) UpdateUserRole(ctx context.Context, id string, role model.UserRole) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE users SET role=?, updated_at=? WHERE id=?`, role, time.Now(), id)
+	return s.UpdateUserRoles(ctx, id, []model.UserRole{role})
+}
+
+func (s *Store) UpdateUserRoles(ctx context.Context, id string, roles []model.UserRole) error {
+	roles = model.NormalizeRoles(roles)
+	primary := model.PrimaryRole(roles)
+	rolesJSON, err := json.Marshal(roles)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE users SET role=?, roles=?, updated_at=? WHERE id=?`, primary, string(rolesJSON), time.Now(), id)
 	return err
 }
 
 func (s *Store) CountUsersByRole(ctx context.Context, role model.UserRole) (int64, error) {
 	var n int64
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role=?`, role).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role=? OR roles LIKE ?`, role, `%`+quoteRoleForLike(role)+`%`).Scan(&n)
 	return n, err
+}
+
+func decodeUserRoles(primary model.UserRole, raw string) []model.UserRole {
+	var roles []model.UserRole
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &roles)
+	}
+	if len(roles) == 0 && primary != "" {
+		roles = []model.UserRole{primary}
+	}
+	return model.NormalizeRoles(roles)
+}
+
+func quoteRoleForLike(role model.UserRole) string {
+	data, _ := json.Marshal(string(role))
+	return strings.Trim(string(data), "[]")
 }
 
 func (s *Store) DeleteUser(ctx context.Context, id string) error {
@@ -645,4 +684,222 @@ func (s *Store) PutSetting(ctx context.Context, key string, val any) error {
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO settings (k, v, updated_at) VALUES (?, ?, ?)`, key, string(data), time.Now())
 	return err
+}
+
+// ---------- candidate_assets（自学习候选资产池） ----------
+
+// CreateCandidate 写入候选资产
+func (s *Store) CreateCandidate(ctx context.Context, a *model.CandidateAsset) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO candidate_assets
+		 (id, asset_type, title, question, content, evidence, source_session_id, source_feedback_id, confidence, status, reviewer, review_note, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.AssetType, a.Title, a.Question, a.Content, a.Evidence, a.SourceSessionID, a.SourceFeedbackID,
+		a.Confidence, a.Status, a.Reviewer, a.ReviewNote, a.CreatedAt, a.UpdatedAt)
+	return err
+}
+
+// GetCandidate 按 ID 查询候选资产
+func (s *Store) GetCandidate(ctx context.Context, id string) (*model.CandidateAsset, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, asset_type, title, question, content, evidence, source_session_id, source_feedback_id, confidence, status, reviewer, review_note, created_at, updated_at
+		 FROM candidate_assets WHERE id=?`, id)
+	return scanCandidate(row)
+}
+
+// ListCandidates 按状态列出候选资产（status 为空则全部），按创建时间倒序
+func (s *Store) ListCandidates(ctx context.Context, status model.CandidateAssetStatus, limit int) ([]*model.CandidateAsset, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	base := `SELECT id, asset_type, title, question, content, evidence, source_session_id, source_feedback_id, confidence, status, reviewer, review_note, created_at, updated_at FROM candidate_assets`
+	if status == "" {
+		rows, err = s.db.QueryContext(ctx, base+` ORDER BY created_at DESC LIMIT ?`, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, base+` WHERE status=? ORDER BY created_at DESC LIMIT ?`, status, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*model.CandidateAsset
+	for rows.Next() {
+		a, err := scanCandidate(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, a)
+	}
+	return result, rows.Err()
+}
+
+// UpdateCandidate 更新候选资产可编辑字段与审批状态
+func (s *Store) UpdateCandidate(ctx context.Context, a *model.CandidateAsset) error {
+	a.UpdatedAt = time.Now()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE candidate_assets
+		 SET asset_type=?, title=?, question=?, content=?, status=?, reviewer=?, review_note=?, updated_at=?
+		 WHERE id=?`,
+		a.AssetType, a.Title, a.Question, a.Content, a.Status, a.Reviewer, a.ReviewNote, a.UpdatedAt, a.ID)
+	return err
+}
+
+// CountCandidatesByStatus 统计各状态候选数（看板/角标）
+func (s *Store) CountCandidatesByStatus(ctx context.Context, status model.CandidateAssetStatus) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM candidate_assets WHERE status=?`, status).Scan(&n)
+	return n, err
+}
+
+func scanCandidate(r rowScanner) (*model.CandidateAsset, error) {
+	var a model.CandidateAsset
+	var question, evidence, reviewNote sql.NullString
+	if err := r.Scan(&a.ID, &a.AssetType, &a.Title, &question, &a.Content, &evidence,
+		&a.SourceSessionID, &a.SourceFeedbackID, &a.Confidence, &a.Status, &a.Reviewer, &reviewNote,
+		&a.CreatedAt, &a.UpdatedAt); err != nil {
+		return nil, err
+	}
+	a.Question = question.String
+	a.Evidence = evidence.String
+	a.ReviewNote = reviewNote.String
+	return &a, nil
+}
+
+// ---------- hermes_learning_assets（Hermes 自学习审计轨） ----------
+
+func (s *Store) CreateHermesLearningAsset(ctx context.Context, a *model.HermesLearningAsset) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO hermes_learning_assets
+		 (id, asset_type, path, content_hash, content, change_type, risk_flags, status, reviewer, review_note, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.AssetType, a.Path, a.ContentHash, a.Content, a.ChangeType, a.RiskFlags,
+		a.Status, a.Reviewer, a.ReviewNote, a.CreatedAt, a.UpdatedAt)
+	return err
+}
+
+func (s *Store) LatestHermesLearningAssetByPath(ctx context.Context, path string) (*model.HermesLearningAsset, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, asset_type, path, content_hash, content, change_type, risk_flags, status, reviewer, review_note, created_at, updated_at
+		 FROM hermes_learning_assets WHERE path=? ORDER BY created_at DESC LIMIT 1`, path)
+	return scanHermesLearningAsset(row)
+}
+
+func (s *Store) ListLatestHermesLearningAssets(ctx context.Context) (map[string]*model.HermesLearningAsset, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT h.id, h.asset_type, h.path, h.content_hash, h.content, h.change_type, h.risk_flags, h.status, h.reviewer, h.review_note, h.created_at, h.updated_at
+		 FROM hermes_learning_assets h
+		 JOIN (
+		   SELECT path, MAX(created_at) AS created_at
+		   FROM hermes_learning_assets
+		   GROUP BY path
+		 ) latest ON latest.path = h.path AND latest.created_at = h.created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := map[string]*model.HermesLearningAsset{}
+	for rows.Next() {
+		a, err := scanHermesLearningAsset(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[a.Path] = a
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) ListHermesLearningAssets(ctx context.Context, status model.HermesLearningStatus, limit int) ([]*model.HermesLearningAsset, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	base := `SELECT id, asset_type, path, content_hash, content, change_type, risk_flags, status, reviewer, review_note, created_at, updated_at FROM hermes_learning_assets`
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if status == "" {
+		rows, err = s.db.QueryContext(ctx, base+` ORDER BY created_at DESC LIMIT ?`, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, base+` WHERE status=? ORDER BY created_at DESC LIMIT ?`, status, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*model.HermesLearningAsset
+	for rows.Next() {
+		a, err := scanHermesLearningAsset(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, a)
+	}
+	return result, rows.Err()
+}
+
+func scanHermesLearningAsset(r rowScanner) (*model.HermesLearningAsset, error) {
+	var a model.HermesLearningAsset
+	var content, riskFlags, reviewNote sql.NullString
+	if err := r.Scan(&a.ID, &a.AssetType, &a.Path, &a.ContentHash, &content, &a.ChangeType, &riskFlags,
+		&a.Status, &a.Reviewer, &reviewNote, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		return nil, err
+	}
+	a.Content = content.String
+	a.RiskFlags = riskFlags.String
+	a.ReviewNote = reviewNote.String
+	return &a, nil
+}
+
+// ---------- learning_jobs（AI 学习任务历史） ----------
+
+func (s *Store) CreateLearningJob(ctx context.Context, j *model.LearningJob) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO learning_jobs (id, source, status, input_sessions, output_assets, error, started_at, finished_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		j.ID, j.Source, j.Status, j.InputSessions, j.OutputAssets, j.Error, j.StartedAt, j.FinishedAt)
+	return err
+}
+
+func (s *Store) UpdateLearningJob(ctx context.Context, j *model.LearningJob) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE learning_jobs
+		 SET status=?, input_sessions=?, output_assets=?, error=?, finished_at=?
+		 WHERE id=?`,
+		j.Status, j.InputSessions, j.OutputAssets, j.Error, j.FinishedAt, j.ID)
+	return err
+}
+
+func (s *Store) ListLearningJobs(ctx context.Context, limit int) ([]*model.LearningJob, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, source, status, input_sessions, output_assets, error, started_at, finished_at
+		 FROM learning_jobs ORDER BY started_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*model.LearningJob
+	for rows.Next() {
+		var j model.LearningJob
+		var errText sql.NullString
+		var finished sql.NullTime
+		if err := rows.Scan(&j.ID, &j.Source, &j.Status, &j.InputSessions, &j.OutputAssets, &errText, &j.StartedAt, &finished); err != nil {
+			return nil, err
+		}
+		j.Error = errText.String
+		if finished.Valid {
+			j.FinishedAt = &finished.Time
+		}
+		result = append(result, &j)
+	}
+	return result, rows.Err()
 }

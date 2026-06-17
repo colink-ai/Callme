@@ -2,8 +2,14 @@
 import axios from 'axios';
 import type {
   AgentSettings,
+  CandidateAsset,
+  CandidateAssetStatus,
+  CandidateAssetType,
   DailyPoint,
   HotQuestion,
+  HermesLearningAsset,
+  HermesLearningStatus,
+  LearningJob,
   LoginResult,
   Message,
   PagedSessions,
@@ -35,7 +41,7 @@ export const api = {
   logout: () => http.post('/auth/logout'),
   me: () => http.get<{ user: User; version?: string }>('/auth/me').then((r) => r.data),
   listUsers: () => http.get<{ users: User[] | null }>('/users').then((r) => r.data.users ?? []),
-  updateUserRole: (id: string, role: UserRole) => http.put(`/users/${id}/role`, { role }),
+  updateUserRole: (id: string, roles: UserRole[]) => http.put(`/users/${id}/role`, { roles }),
   deleteUser: (id: string) => http.delete(`/users/${id}`),
 
   // 会话
@@ -88,6 +94,35 @@ export const api = {
   }) => http.post('/feedback', payload),
   getLearningNotes: () =>
     http.get<{ notes: string }>('/learning/notes').then((r) => r.data.notes),
+
+  // 自学习沙箱：候选资产审批
+  listCandidates: (status?: CandidateAssetStatus) =>
+    http
+      .get<{ candidates: CandidateAsset[] | null }>('/learning/candidates', {
+        params: status ? { status } : {},
+      })
+      .then((r) => r.data.candidates ?? []),
+  updateCandidate: (id: string, payload: Partial<CandidateAsset>) =>
+    http.put<CandidateAsset>(`/learning/candidates/${id}`, payload).then((r) => r.data),
+  reviewCandidate: (id: string, approve: boolean, note?: string) =>
+    http
+      .post<CandidateAsset>(`/learning/candidates/${id}/review`, { approve, note })
+      .then((r) => r.data),
+  createManualKnowledgeDraft: (payload: {
+    assetType: CandidateAssetType;
+    description: string;
+    images?: { base64: string; data?: string; mimeType: string; filename?: string; width?: number; height?: number }[];
+  }) =>
+    http.post<CandidateAsset>('/learning/manual-drafts', payload, { timeout: 90000 }).then((r) => r.data),
+  listHermesLearningAssets: (status?: HermesLearningStatus) =>
+    http
+      .get<{ assets: HermesLearningAsset[] | null }>('/learning/hermes-assets', {
+        params: status ? { status } : {},
+      })
+      .then((r) => r.data.assets ?? []),
+  listLearningJobs: () =>
+    http.get<{ jobs: LearningJob[] | null }>('/learning/jobs').then((r) => r.data.jobs ?? []),
+  runLearningJob: () => http.post('/learning/jobs/run'),
 
   // 工单
   createHandoff: (sessionId: string, reason: string) =>

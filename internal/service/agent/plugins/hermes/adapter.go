@@ -4,7 +4,8 @@
 //   - Hermes ACP 不从环境变量读取模型配置，必须通过 HERMES_HOME/config.yaml；
 //   - 每次启动会话前生成/更新 config.yaml（model.default / provider: custom / base_url）；
 //   - 环境变量补充 provider 运行时配置：HERMES_INFERENCE_PROVIDER / CUSTOM_BASE_URL / OPENAI_API_KEY；
-//   - HERMES_HOME 指向共享持久化目录 —— Hermes 的自学习记忆跨会话累积，系统越用越聪明。
+//   - HERMES_HOME 指向 Callme 管理的 Hermes 工作目录。正式客服知识只来自审批发布内容；
+//     Hermes 自学习 skill/memory 保持在 Hermes 原生目录，由 Callme 审计轨记录与治理。
 package hermes
 
 import (
@@ -38,7 +39,8 @@ func NewHermesAdapter() agent.Adapter {
 	return &HermesAdapter{BaseAdapter: acp.NewBaseAdapter(config)}
 }
 
-// generateHermesConfig 在 HERMES_HOME 下生成 config.yaml（模型配置与 Hermes 本地 MCP 配置）
+// generateHermesConfig 在 HERMES_HOME 下生成 config.yaml（模型配置与 Hermes 本地 MCP 配置）。
+// 业务事实应来自 approved_knowledge.md / MCP 证据 / 当前会话，不应由 Hermes memory 单独支撑。
 func generateHermesConfig(spec agent.AgentSpec, mcpServers []agent.MCPServerSpec) {
 	if spec.HermesHome == "" {
 		return
@@ -60,6 +62,12 @@ func generateHermesConfig(spec agent.AgentSpec, mcpServers []agent.MCPServerSpec
 			cfg["mcp_servers"] = servers
 		}
 	}
+
+	// 自学习声明：默认允许 Hermes 使用原生 skills/memories 目录，Callme 通过审计轨记录变化。
+	// 这些开关是否在 ACP 模式下被严格遵守取决于 Hermes 版本，这里保留为收敛意图。
+	cfg["memory"] = map[string]any{"memory_enabled": false}
+	cfg["curator"] = map[string]any{"enabled": false}
+	cfg["skills"] = map[string]any{"guard_agent_created": true}
 
 	data, err := yaml.Marshal(cfg)
 	if err != nil {

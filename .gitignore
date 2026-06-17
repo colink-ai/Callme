@@ -22,6 +22,7 @@ callme.pid
 /.upgrade-tmp-*/
 
 # 临时与系统文件
+.cache/
 *.log
 .DS_Store
 

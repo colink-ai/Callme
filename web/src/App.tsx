@@ -1,6 +1,7 @@
 import { Avatar, Dropdown, Layout, Menu, Space, Spin, Tag, Typography } from 'antd';
 import {
   BgColorsOutlined,
+  BulbOutlined,
   CheckOutlined,
   CommentOutlined,
   DashboardOutlined,
@@ -14,6 +15,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import Logo from './components/Logo';
 import AuthPage from './pages/Auth';
 import ChatPage from './pages/Chat';
+import CurationPage from './pages/Curation';
 import DashboardPage from './pages/Dashboard';
 import MonitorPage from './pages/Monitor';
 import TicketsPage from './pages/Tickets';
@@ -39,6 +41,17 @@ const adminMenuItems = [
   { key: '/users', icon: <TeamOutlined />, label: '用户管理' },
   { key: '/settings', icon: <SettingOutlined />, label: '设置' },
 ];
+
+const knowledgeMenuItems = [
+  { key: '/curation', icon: <BulbOutlined />, label: '知识沉淀' },
+];
+
+const roleLabels = {
+  normal: '普通用户',
+  vip: 'VIP',
+  knowledge_expert: '知识专家',
+  admin: '管理员',
+} as const;
 
 // 主题切换器（参考 ReviewBuddy：只有图标，没有文字）
 function ThemeSwitcher() {
@@ -66,7 +79,14 @@ export default function App() {
   const location = useLocation();
   const { token, user, version, restoring, restore, logout } = useAuthStore();
   const resetChat = useChatStore((s) => s.reset);
-  const allItems = user?.role === 'admin' ? [...menuItems, ...adminMenuItems] : menuItems;
+  const roles = user?.roles?.length ? user.roles : user ? [user.role] : [];
+  const hasRole = (role: string) => roles.includes(role as typeof roles[number]);
+  const canManageKnowledge = hasRole('admin') || hasRole('knowledge_expert');
+  const allItems = [
+    ...menuItems,
+    ...(canManageKnowledge ? knowledgeMenuItems : []),
+    ...(hasRole('admin') ? adminMenuItems : []),
+  ];
   const selected = allItems.find((m) => location.pathname.startsWith(m.key))?.key ?? '/chat';
 
   useEffect(() => {
@@ -83,7 +103,14 @@ export default function App() {
 
   if (!token || !user) return <AuthPage />;
 
-  const roleLabel = user.role === 'admin' ? '管理员' : user.role === 'vip' ? 'VIP' : '普通用户';
+  const roleLabel = roles.map((role) => roleLabels[role] ?? role).join(' / ');
+  const roleColor = hasRole('admin')
+    ? 'red'
+    : hasRole('knowledge_expert')
+      ? 'cyan'
+      : hasRole('vip')
+        ? 'gold'
+        : 'default';
 
   return (
     <Layout style={{ height: '100%' }}>
@@ -119,7 +146,7 @@ export default function App() {
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: 'var(--text-primary)' }}>
               <Avatar size={22} icon={<UserOutlined />} />
               <span style={{ fontSize: 14 }}>{user.username}</span>
-              <Tag color={user.role === 'vip' ? 'gold' : user.role === 'admin' ? 'red' : 'default'} style={{ margin: 0, fontSize: 11 }}>{roleLabel}</Tag>
+              <Tag color={roleColor} style={{ margin: 0, fontSize: 11 }}>{roleLabel}</Tag>
             </span>
           </Dropdown>
           <ThemeSwitcher />
@@ -129,7 +156,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/chat" replace />} />
           <Route path="/chat" element={<ChatPage />} />
-          {user.role === 'admin' && (
+          {canManageKnowledge && <Route path="/curation" element={<CurationPage />} />}
+          {hasRole('admin') && (
             <>
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/monitor" element={<MonitorPage />} />

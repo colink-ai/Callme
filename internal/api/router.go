@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -70,13 +71,17 @@ func NewRouter(d *Deps) *gin.Engine {
 		// 反馈（自学习闭环入口）
 		protected.POST("/feedback", d.submitFeedback)
 		protected.GET("/learning/notes", d.knowledgeContributorRequired(), d.getLearningNotes)
-		// 知识沉淀：知识专员可录入/编辑候选；知识专家/管理员负责审批与审计。
+		// 知识沉淀：知识专员可录入/编辑/AI 生成候选；知识专家/管理员负责审批与审计。
 		protected.GET("/learning/candidates", d.knowledgeContributorRequired(), d.listCandidates)
 		protected.POST("/learning/manual-drafts", d.knowledgeContributorRequired(), d.createManualKnowledgeDraft)
+		protected.POST("/learning/manual-drafts/stream", d.knowledgeContributorRequired(), d.createManualKnowledgeDraftStream)
 		protected.PUT("/learning/candidates/:id", d.knowledgeContributorRequired(), d.updateCandidate)
+		protected.GET("/learning/jobs", d.knowledgeContributorRequired(), d.listLearningJobs)
+		protected.POST("/learning/jobs/run", d.knowledgeContributorRequired(), d.runLearningJob)
 		protected.GET("/learning/hermes-assets", d.knowledgeReviewerRequired(), d.listHermesLearningAssets)
-		protected.GET("/learning/jobs", d.knowledgeReviewerRequired(), d.listLearningJobs)
-		protected.POST("/learning/jobs/run", d.knowledgeReviewerRequired(), d.runLearningJob)
+		protected.POST("/learning/hermes-assets/:id/review", d.knowledgeReviewerRequired(), d.reviewHermesLearningAsset)
+		protected.POST("/learning/hermes-assets/:id/assist-edit", d.knowledgeReviewerRequired(), d.assistHermesLearningEdit)
+		protected.POST("/learning/hermes-assets/:id/assist-edit/stream", d.knowledgeReviewerRequired(), d.assistHermesLearningEditStream)
 		protected.POST("/learning/candidates/:id/review", d.knowledgeReviewerRequired(), d.reviewCandidate)
 
 		// 转人工/工单
@@ -594,6 +599,66 @@ func (d *Deps) listHermesLearningAssets(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"assets": items})
 }
 
+func (d *Deps) reviewHermesLearningAsset(c *gin.Context) {
+	var req feedback.ReviewHermesLearningRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	asset, err := d.Feedback.ReviewHermesLearningAsset(c.Request.Context(), c.Param("id"), req, currentUser(c).Username)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, asset)
+}
+
+func (d *Deps) assistHermesLearningEdit(c *gin.Context) {
+	var req feedback.AssistHermesLearningEditRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	content, err := d.Feedback.AssistHermesLearningEdit(c.Request.Context(), c.Param("id"), req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"content": content})
+}
+
+func (d *Deps) assistHermesLearningEditStream(c *gin.Context) {
+	var req feedback.AssistHermesLearningEditRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "当前服务不支持流式响应"})
+		return
+	}
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.WriteHeader(http.StatusOK)
+
+	writeEvent := func(event feedback.ManualDraftStreamEvent) error {
+		data, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		if _, err := c.Writer.Write([]byte("data: " + string(data) + "\n\n")); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	if err := d.Feedback.AssistHermesLearningEditStream(c.Request.Context(), c.Param("id"), req, writeEvent); err != nil {
+		_ = writeEvent(feedback.ManualDraftStreamEvent{Type: "error", Error: err.Error()})
+	}
+}
+
 func (d *Deps) listLearningJobs(c *gin.Context) {
 	items, err := d.Feedback.ListLearningJobs(c.Request.Context())
 	if err != nil {
@@ -623,6 +688,38 @@ func (d *Deps) createManualKnowledgeDraft(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, cand)
+}
+
+func (d *Deps) createManualKnowledgeDraftStream(c *gin.Context) {
+	var req feedback.ManualDraftRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "当前服务不支持流式响应"})
+		return
+	}
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.WriteHeader(http.StatusOK)
+
+	writeEvent := func(event feedback.ManualDraftStreamEvent) error {
+		data, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		if _, err := c.Writer.Write([]byte("data: " + string(data) + "\n\n")); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	if err := d.Feedback.CreateManualDraftStream(c.Request.Context(), req, writeEvent); err != nil {
+		_ = writeEvent(feedback.ManualDraftStreamEvent{Type: "error", Error: err.Error()})
+	}
 }
 
 func (d *Deps) updateCandidate(c *gin.Context) {

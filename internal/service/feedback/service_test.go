@@ -56,7 +56,7 @@ func TestDistillProducesPendingCandidate(t *testing.T) {
 	if len(cands) != 1 {
 		t.Fatalf("expect 1 pending candidate, got %d", len(cands))
 	}
-	if cands[0].Content != "在设置页点击重置密码" || cands[0].AssetType != model.CandidateAssetFAQ {
+	if cands[0].Content != "在设置页点击重置密码" || cands[0].AssetType != model.CandidateAssetKnowledge {
 		t.Fatalf("unexpected candidate: %+v", cands[0])
 	}
 	// 关键：蒸馏不得写正式知识文件（通过前不进回答链路）
@@ -71,7 +71,7 @@ func TestReviewApprovePublishes(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now()
-	c := &model.CandidateAsset{ID: "cand1", AssetType: model.CandidateAssetFAQ, Title: "重置密码", Question: "如何重置密码", Content: "去设置页重置", Status: model.CandidateStatusPending, CreatedAt: now, UpdatedAt: now}
+	c := &model.CandidateAsset{ID: "cand1", AssetType: model.CandidateAssetKnowledge, PublishTargets: []model.KnowledgePublishTarget{model.KnowledgePublishLocal}, Title: "重置密码", Question: "如何重置密码", Content: "去设置页重置", Status: model.CandidateStatusPending, CreatedAt: now, UpdatedAt: now}
 	if err := store.CreateCandidate(ctx, c); err != nil {
 		t.Fatalf("create candidate: %v", err)
 	}
@@ -97,16 +97,46 @@ func TestReviewApprovePublishes(t *testing.T) {
 	}
 }
 
-func TestAuditIncludesQuarantinedHermesAssets(t *testing.T) {
+func TestReviewApprovePublishesSkill(t *testing.T) {
 	s, store, home := newTestService(t)
 	ctx := context.Background()
-	qdir := filepath.Join(home, "_quarantine", "legacy", "memories")
-	if err := os.MkdirAll(qdir, 0o755); err != nil {
-		t.Fatalf("mkdir quarantine: %v", err)
+
+	now := time.Now()
+	c := &model.CandidateAsset{
+		ID:             "cand-skill",
+		AssetType:      model.CandidateAssetKnowledge,
+		PublishTargets: []model.KnowledgePublishTarget{model.KnowledgePublishSkill},
+		Title:          "Agent 超时排查",
+		Question:       "Agent 回答为什么中断",
+		Content:        "检查 agent.prompt_timeout 和代理超时。",
+		Status:         model.CandidateStatusPending,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
-	if err := os.WriteFile(filepath.Join(qdir, "MEMORY.md"), []byte("token expired 通常与 SSO 配置有关"), 0o644); err != nil {
-		t.Fatalf("write memory: %v", err)
+	if err := store.CreateCandidate(ctx, c); err != nil {
+		t.Fatalf("create candidate: %v", err)
 	}
+
+	if _, err := s.ReviewCandidate(ctx, "cand-skill", true, "admin", "ok"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "skills", "callme-approved", "agent-超时排查", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("skill should exist after approve: %v", err)
+	}
+	if !contains(string(data), "检查 agent.prompt_timeout") {
+		t.Fatalf("skill missing content: %s", data)
+	}
+}
+
+func TestAuditIgnoresQuarantineAndSkillMetadata(t *testing.T) {
+	s, store, home := newTestService(t)
+	ctx := context.Background()
+
+	mustWriteFeedbackTest(t, filepath.Join(home, "skills", ".usage.json"), "{}")
+	mustWriteFeedbackTest(t, filepath.Join(home, "skills", "support", "callme", "SKILL.md"), "# Callme Skill")
+	mustWriteFeedbackTest(t, filepath.Join(home, "skills", "support", "callme", "references", "notes.md"), "reference")
+	mustWriteFeedbackTest(t, filepath.Join(home, "_quarantine", "legacy", "memories", "MEMORY.md"), "token expired 通常与 SSO 配置有关")
 
 	if err := s.auditHermesLearning(ctx); err != nil {
 		t.Fatalf("audit: %v", err)
@@ -118,8 +148,103 @@ func TestAuditIncludesQuarantinedHermesAssets(t *testing.T) {
 	if len(assets) != 1 {
 		t.Fatalf("assets len = %d, want 1", len(assets))
 	}
-	if !contains(assets[0].RiskFlags, "quarantined") || !contains(assets[0].RiskFlags, "diagnostic_claim") {
-		t.Fatalf("unexpected risk flags: %s", assets[0].RiskFlags)
+	if assets[0].AssetType != model.HermesLearningAssetSkill || filepath.Base(assets[0].Path) != "SKILL.md" {
+		t.Fatalf("unexpected asset: %+v", assets[0])
+	}
+}
+
+func TestAuditPreservesHermesAssetFormatting(t *testing.T) {
+	s, store, home := newTestService(t)
+	ctx := context.Background()
+	body := "---\nname: demo\n---\n\n# Demo Skill\n\n- step one\n- step two\n"
+	mustWriteFeedbackTest(t, filepath.Join(home, "skills", "demo", "SKILL.md"), body)
+
+	if err := s.auditHermesLearning(ctx); err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	raw, err := store.LatestHermesLearningAssetByPath(ctx, filepath.Join(home, "skills", "demo", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("latest asset: %v", err)
+	}
+	if raw.Content != "" {
+		t.Fatalf("audit record should not persist file content, got %q", raw.Content)
+	}
+	assets, err := store.ListHermesLearningAssets(ctx, model.HermesLearningStatusPendingReview, 100)
+	if err != nil {
+		t.Fatalf("list assets: %v", err)
+	}
+	if len(assets) != 1 {
+		t.Fatalf("assets len = %d, want 1", len(assets))
+	}
+	if assets[0].Content != body {
+		t.Fatalf("content formatting lost:\n%s", assets[0].Content)
+	}
+}
+
+func TestReviewHermesLearningAssetDeletesFile(t *testing.T) {
+	s, store, home := newTestService(t)
+	ctx := context.Background()
+	path := filepath.Join(home, "skills", "demo", "SKILL.md")
+	mustWriteFeedbackTest(t, path, "# Demo Skill")
+
+	if err := s.auditHermesLearning(ctx); err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	assets, err := store.ListHermesLearningAssets(ctx, model.HermesLearningStatusPendingReview, 100)
+	if err != nil || len(assets) != 1 {
+		t.Fatalf("list assets: len=%d err=%v", len(assets), err)
+	}
+	reviewed, err := s.ReviewHermesLearningAsset(ctx, assets[0].ID, ReviewHermesLearningRequest{Action: "delete"}, "admin")
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if reviewed.Status != model.HermesLearningStatusDeleted {
+		t.Fatalf("status = %s, want deleted", reviewed.Status)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("file should be removed, stat err=%v", err)
+	}
+}
+
+func TestReviewHermesLearningAssetModifiesFile(t *testing.T) {
+	s, store, home := newTestService(t)
+	ctx := context.Background()
+	path := filepath.Join(home, "skills", "demo", "SKILL.md")
+	mustWriteFeedbackTest(t, path, "# Demo Skill\n\nold content\n")
+
+	if err := s.auditHermesLearning(ctx); err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	assets, err := store.ListHermesLearningAssets(ctx, model.HermesLearningStatusPendingReview, 100)
+	if err != nil || len(assets) != 1 {
+		t.Fatalf("list assets: len=%d err=%v", len(assets), err)
+	}
+	reviewed, err := s.ReviewHermesLearningAsset(ctx, assets[0].ID, ReviewHermesLearningRequest{
+		Action:  "modify",
+		Content: "# Demo Skill\n\nnew content",
+	}, "admin")
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if reviewed.Status != model.HermesLearningStatusModified {
+		t.Fatalf("status = %s, want modified", reviewed.Status)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read modified file: %v", err)
+	}
+	if string(data) != "# Demo Skill\n\nnew content\n" {
+		t.Fatalf("unexpected file content: %q", string(data))
+	}
+}
+
+func mustWriteFeedbackTest(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 }
 

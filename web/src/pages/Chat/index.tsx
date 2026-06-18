@@ -222,7 +222,7 @@ function FeedbackBar({ msg }: { msg: ChatMessage }) {
         okText="提交"
         cancelText="取消"
       >
-        <Text type="secondary">你的纠错会沉淀为 FAQ / 排障路径，帮助下次更快定位同类问题。</Text>
+        <Text type="secondary">你的纠错会沉淀为候选知识，审批后帮助下次更快定位同类问题。</Text>
         <Input.TextArea
           rows={4}
           style={{ marginTop: 12 }}

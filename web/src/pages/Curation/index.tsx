@@ -5,12 +5,13 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Button,
   Card,
+  Checkbox,
   Empty,
   Image,
   Input,
   Modal,
+  Popconfirm,
   Segmented,
-  Select,
   Space,
   Table,
   Tag,
@@ -20,16 +21,19 @@ import {
   message,
 } from 'antd';
 import { CheckOutlined, CloseOutlined, EditOutlined, PictureOutlined, ReloadOutlined } from '@ant-design/icons';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import dayjs from 'dayjs';
 import { api, apiErrorMessage } from '../../api/client';
 import { useAuthStore } from '../../store/authStore';
+import { useAITaskStore } from '../../store/aiTaskStore';
 import type {
   CandidateAsset,
   CandidateAssetStatus,
-  CandidateAssetType,
   HermesLearningAsset,
   HermesLearningStatus,
   ImageAttachment,
+  KnowledgePublishTarget,
   LearningJob,
   LearningJobStatus,
 } from '../../types';
@@ -60,6 +64,31 @@ const jobStatusMeta: Record<LearningJobStatus, { label: string; color: string }>
   skipped: { label: '跳过', color: 'default' },
 };
 
+const publishTargetMeta: Record<KnowledgePublishTarget, { label: string; color: string; description: string }> = {
+  local: { label: '本地知识', color: 'green', description: '写入 approved_knowledge.md，作为正式知识依据' },
+  skill: { label: 'Skill', color: 'purple', description: '写入 Hermes skills/callme-approved' },
+  knowledge_base: { label: '知识库', color: 'blue', description: '外部知识库写入器待接入' },
+};
+
+const publishTargetOptions = [
+  { label: '本地知识', value: 'local' as KnowledgePublishTarget },
+  { label: 'Skill', value: 'skill' as KnowledgePublishTarget },
+  { label: '写入知识库（待接入）', value: 'knowledge_base' as KnowledgePublishTarget, disabled: true },
+];
+
+type HermesReviewAction = 'keep' | 'delete' | 'modify';
+
+function normalizePublishTargets(targets?: KnowledgePublishTarget[]): KnowledgePublishTarget[] {
+  return targets?.length ? targets : ['local'];
+}
+
+function renderPublishTargets(targets?: KnowledgePublishTarget[]) {
+  return normalizePublishTargets(targets).map((target) => {
+    const meta = publishTargetMeta[target] ?? publishTargetMeta.local;
+    return <Tag key={target} color={meta.color}>{meta.label}</Tag>;
+  });
+}
+
 function parseEvidence(raw?: string): Record<string, unknown> | null {
   if (!raw) return null;
   try {
@@ -69,12 +98,23 @@ function parseEvidence(raw?: string): Record<string, unknown> | null {
   }
 }
 
+function formatHermesAssetContent(row: HermesLearningAsset): string {
+  const content = row.content?.trim();
+  if (!content) return '（删除记录或内容为空）';
+  if (row.assetType === 'skill') {
+    return content;
+  }
+  return content;
+}
+
 export default function CurationPage() {
   const { user, activeRole } = useAuthStore();
   const roles = user?.roles?.length ? user.roles : user ? [user.role] : [];
   const usingRole = activeRole && roles.includes(activeRole as typeof roles[number]) ? activeRole : user?.role;
   const canReview = usingRole === 'admin' || usingRole === 'knowledge_expert';
-  const [track, setTrack] = useState<'manual' | 'knowledge' | 'hermes' | 'jobs' | 'approved'>('manual');
+  const { startTask, appendTask, setTaskContent, finishTask, failTask } = useAITaskStore();
+  const [track, setTrack] = useState<'candidates' | 'approved' | 'hermes'>('candidates');
+  const [candidateView, setCandidateView] = useState<'manual' | 'ai' | 'review' | 'jobs'>('manual');
   const [status, setStatus] = useState<CandidateAssetStatus>('pending');
   const [hermesStatus, setHermesStatus] = useState<HermesLearningStatus>('pending_review');
   const [items, setItems] = useState<CandidateAsset[]>([]);
@@ -82,25 +122,32 @@ export default function CurationPage() {
   const [jobs, setJobs] = useState<LearningJob[]>([]);
   const [approvedNotes, setApprovedNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  const [reviewingHermesID, setReviewingHermesID] = useState<string | null>(null);
+  const [viewingHermes, setViewingHermes] = useState<HermesLearningAsset | null>(null);
+  const [hermesDraftContent, setHermesDraftContent] = useState('');
+  const [hermesAIInstruction, setHermesAIInstruction] = useState('');
+  const [hermesAILoading, setHermesAILoading] = useState(false);
   const [editing, setEditing] = useState<CandidateAsset | null>(null);
   const [viewing, setViewing] = useState<CandidateAsset | null>(null);
   const [rejecting, setRejecting] = useState<CandidateAsset | null>(null);
   const [rejectNote, setRejectNote] = useState('');
-  const [manualType, setManualType] = useState<CandidateAssetType>('wiki');
+  const [manualTargets, setManualTargets] = useState<KnowledgePublishTarget[]>(['local']);
   const [manualDescription, setManualDescription] = useState('');
   const [manualImages, setManualImages] = useState<ImageAttachment[]>([]);
+  const [manualStreaming, setManualStreaming] = useState(false);
+  const [manualStreamContent, setManualStreamContent] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      if (track === 'manual') {
+      if (track === 'candidates' && (candidateView === 'manual' || candidateView === 'ai')) {
         return;
       }
-      if (track === 'knowledge') {
+      if (track === 'candidates' && candidateView === 'review') {
         setItems(await api.listCandidates(status));
       } else if (track === 'hermes') {
         setHermesItems(await api.listHermesLearningAssets(hermesStatus));
-      } else if (track === 'jobs') {
+      } else if (track === 'candidates' && candidateView === 'jobs') {
         setJobs(await api.listLearningJobs());
       } else {
         setApprovedNotes(await api.getLearningNotes());
@@ -110,15 +157,25 @@ export default function CurationPage() {
     } finally {
       setLoading(false);
     }
-  }, [track, status, hermesStatus]);
+  }, [track, candidateView, status, hermesStatus]);
 
   useEffect(() => {
-    if (!canReview && (track === 'hermes' || track === 'jobs')) {
-      setTrack('manual');
+    if (!canReview && track === 'hermes') {
+      setTrack('candidates');
       return;
     }
     load();
-  }, [canReview, load, track]);
+  }, [canReview, candidateView, load, track]);
+
+  useEffect(() => {
+    if (!viewingHermes) {
+      setHermesDraftContent('');
+      setHermesAIInstruction('');
+      return;
+    }
+    setHermesDraftContent(formatHermesAssetContent(viewingHermes));
+    setHermesAIInstruction('');
+  }, [viewingHermes]);
 
   const approve = async (c: CandidateAsset) => {
     try {
@@ -148,12 +205,67 @@ export default function CurationPage() {
     try {
       await api.runLearningJob();
       message.success('AI 学习任务已执行');
-      setTrack('jobs');
+      setTrack('candidates');
+      setCandidateView('jobs');
       setJobs(await api.listLearningJobs());
     } catch (err) {
       message.error(apiErrorMessage(err));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const reviewHermesAsset = async (row: HermesLearningAsset, action: HermesReviewAction) => {
+    const actionLabels: Record<HermesReviewAction, string> = {
+      keep: '保留',
+      delete: '删除',
+      modify: '保存修改',
+    };
+    setReviewingHermesID(row.id);
+    try {
+      await api.reviewHermesLearningAsset(row.id, action, undefined, action === 'modify' ? hermesDraftContent : undefined);
+      message.success(`已${actionLabels[action]}`);
+      setHermesItems((prev) => prev.filter((item) => item.id !== row.id));
+      setViewingHermes(null);
+    } catch (err) {
+      message.error(apiErrorMessage(err));
+    } finally {
+      setReviewingHermesID(null);
+    }
+  };
+
+  const assistHermesEdit = async () => {
+    if (!viewingHermes) return;
+    if (!hermesAIInstruction.trim()) {
+      message.warning('请先输入希望 AI 修改的要求');
+      return;
+    }
+    setHermesAILoading(true);
+    const taskId = startTask({ title: 'AI 修订 Hermes 内容', source: '知识沉淀 / Hermes 审计' });
+    setHermesDraftContent('');
+    try {
+      await api.streamHermesLearningEdit(viewingHermes.id, hermesAIInstruction.trim(), hermesDraftContent, (event) => {
+        if (event.type === 'status') {
+          setTaskContent(taskId, event.content ?? '');
+        }
+        if (event.type === 'delta') {
+          const delta = event.delta ?? '';
+          setHermesDraftContent((prev) => prev + delta);
+          appendTask(taskId, delta);
+        }
+        if (event.type === 'done') {
+          setHermesDraftContent(event.content ?? '');
+          setTaskContent(taskId, event.content ?? '');
+          finishTask(taskId);
+        }
+      });
+      message.success('AI 已生成修订稿，请确认后再保存');
+    } catch (err) {
+      const msg = apiErrorMessage(err);
+      failTask(taskId, msg);
+      message.error(msg);
+    } finally {
+      setHermesAILoading(false);
     }
   };
 
@@ -213,22 +325,43 @@ export default function CurationPage() {
       message.warning('请先输入知识描述或上传图片');
       return;
     }
-    setLoading(true);
+    setManualStreaming(true);
+    setManualStreamContent('');
+    const taskId = startTask({ title: '生成候选知识', source: '知识沉淀 / 人工录入' });
     try {
-      await api.createManualKnowledgeDraft({
-        assetType: manualType,
+      await api.streamManualKnowledgeDraft({
+        publishTargets: manualTargets,
         description: manualDescription.trim(),
         images: manualImages,
+      }, (event) => {
+        if (event.type === 'status') {
+          setManualStreamContent(event.content ?? '');
+          setTaskContent(taskId, event.content ?? '');
+        }
+        if (event.type === 'delta') {
+          const delta = event.delta ?? '';
+          setManualStreamContent((prev) => prev + delta);
+          appendTask(taskId, delta);
+        }
+        if (event.type === 'done') {
+          setManualStreamContent(event.content ?? '');
+          setTaskContent(taskId, event.content ?? '');
+          finishTask(taskId);
+        }
       });
       message.success('已生成候选知识，等待审批');
       setManualDescription('');
       setManualImages([]);
+      setManualStreamContent('');
       setStatus('pending');
-      setTrack('knowledge');
+      setTrack('candidates');
+      setCandidateView('review');
     } catch (err) {
-      message.error(apiErrorMessage(err));
+      const msg = apiErrorMessage(err);
+      failTask(taskId, msg);
+      message.error(msg);
     } finally {
-      setLoading(false);
+      setManualStreaming(false);
     }
   };
 
@@ -237,6 +370,7 @@ export default function CurationPage() {
     try {
       await api.updateCandidate(editing.id, {
         assetType: editing.assetType,
+        publishTargets: normalizePublishTargets(editing.publishTargets),
         title: editing.title,
         question: editing.question,
         content: editing.content,
@@ -252,33 +386,44 @@ export default function CurationPage() {
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
       <Space style={{ marginBottom: 8, width: '100%', justifyContent: 'space-between' }}>
-        <Title level={4} style={{ margin: 0 }}>知识沉淀 · 审批</Title>
+        <Title level={4} style={{ margin: 0 }}>知识沉淀</Title>
         <Space>
-          {canReview && <Button onClick={runLearningJob} loading={loading}>立即 AI 学习</Button>}
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
         </Space>
       </Space>
       <Paragraph type="secondary" style={{ fontSize: 13 }}>
-        {canReview ? '双轨学习机制：客服知识走候选审批，Hermes 自学习走审计纠偏。' : '知识专员可录入并维护候选知识，提交后由知识专家或管理员审批。'}
+        {canReview ? '知识候选统一进入审批流；Hermes 自学习单独审计纠偏。' : '知识专员可录入并维护候选知识，提交后由知识专家或管理员审批。'}
         <Text strong>业务事实必须审批后才可作为正式依据</Text>。
       </Paragraph>
 
       <Segmented
         style={{ marginBottom: 12 }}
         value={track}
-        onChange={(v) => setTrack(v as 'manual' | 'knowledge' | 'hermes' | 'jobs' | 'approved')}
+        onChange={(v) => setTrack(v as 'candidates' | 'approved' | 'hermes')}
         options={[
-          { label: '人工录入', value: 'manual' },
-          { label: '客服知识审批', value: 'knowledge' },
+          { label: '候选知识', value: 'candidates' },
+          { label: '正式知识', value: 'approved' },
           ...(canReview ? [
             { label: 'Hermes 自学习审计', value: 'hermes' },
-            { label: 'AI 执行历史', value: 'jobs' },
           ] : []),
-          { label: '正式知识', value: 'approved' },
         ]}
       />
 
-      {track === 'knowledge' && (
+      {track === 'candidates' && (
+        <Segmented
+          style={{ marginBottom: 12, display: 'block' }}
+          value={candidateView}
+          onChange={(v) => setCandidateView(v as 'manual' | 'ai' | 'review' | 'jobs')}
+          options={[
+            { label: '人工录入', value: 'manual' },
+            { label: 'AI 挖掘', value: 'ai' },
+            { label: '候选审批', value: 'review' },
+            { label: '执行历史', value: 'jobs' },
+          ]}
+        />
+      )}
+
+      {track === 'candidates' && candidateView === 'review' && (
         <Segmented
           style={{ marginBottom: 16, display: 'block' }}
           value={status}
@@ -298,27 +443,25 @@ export default function CurationPage() {
         options={[
           { label: '待审计', value: 'pending_review' },
           { label: '已保留', value: 'kept' },
-          { label: '禁作依据', value: 'prohibited_as_evidence' },
+          { label: '已修改', value: 'modified' },
           { label: '已删除', value: 'deleted' },
-          { label: '已转候选', value: 'converted' },
         ]}
         />
       )}
 
       <Card>
-        {track === 'manual' && (
+        {track === 'candidates' && candidateView === 'manual' && (
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
             <Space direction="vertical" size={6} style={{ width: '100%' }}>
-              <Text strong>知识类型</Text>
-              <Select
-                style={{ width: 220 }}
-                value={manualType}
-                onChange={setManualType}
-                options={[
-                  { value: 'wiki', label: 'Wiki（完整知识）' },
-                  { value: 'faq', label: 'FAQ（标准问答）' },
-                ]}
+              <Text strong>发布目标</Text>
+              <Checkbox.Group
+                value={manualTargets}
+                options={publishTargetOptions}
+                onChange={(values) => setManualTargets(values as KnowledgePublishTarget[])}
               />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                生成候选知识后，审批通过时会按发布目标写入。外部知识库写入器后续接入后可启用。
+              </Text>
             </Space>
             <Space direction="vertical" size={6} style={{ width: '100%' }}>
               <Text strong>原始描述</Text>
@@ -367,19 +510,50 @@ export default function CurationPage() {
               )}
             </Space>
             <Space>
-              <Button type="primary" onClick={createManualDraft} loading={loading}>
-                生成候选知识
+              <Button type="primary" onClick={createManualDraft} loading={manualStreaming}>
+                {manualStreaming ? '生成中' : '生成候选知识'}
               </Button>
               <Button onClick={() => {
                 setManualDescription('');
                 setManualImages([]);
+                setManualStreamContent('');
               }}>
                 清空
               </Button>
             </Space>
+            {(manualStreaming || manualStreamContent) && (
+              <Card size="small" title="AI 生成过程">
+                <div className={`hermes-asset-preview markdown-body ${manualStreaming ? 'streaming-cursor' : ''}`}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {manualStreamContent || '正在连接 AI，请稍候…'}
+                  </ReactMarkdown>
+                </div>
+              </Card>
+            )}
           </Space>
         )}
-        {track === 'knowledge' && (items.length === 0 ? (
+        {track === 'candidates' && candidateView === 'ai' && (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <div>
+              <Title level={5} style={{ marginTop: 0 }}>AI 挖掘历史会话</Title>
+              <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                AI 会从最近已结束的会话中提炼可复用知识，生成候选知识后仍需人工审批；不会直接进入正式知识或 Agent 回答链路。
+              </Paragraph>
+            </div>
+            <Space>
+              <Button type="primary" onClick={runLearningJob} loading={loading}>
+                立即开始挖掘
+              </Button>
+              <Button onClick={() => {
+                setCandidateView('jobs');
+                setTrack('candidates');
+              }}>
+                查看执行历史
+              </Button>
+            </Space>
+          </Space>
+        )}
+        {track === 'candidates' && candidateView === 'review' && (items.length === 0 ? (
           <Empty description="暂无候选知识" />
         ) : (
           <Table<CandidateAsset>
@@ -389,10 +563,10 @@ export default function CurationPage() {
             pagination={{ pageSize: 10 }}
             columns={[
               {
-                title: '类型',
-                dataIndex: 'assetType',
-                width: 70,
-                render: (t: string) => <Tag color={t === 'wiki' ? 'blue' : 'cyan'}>{t.toUpperCase()}</Tag>,
+                title: '发布目标',
+                dataIndex: 'publishTargets',
+                width: 180,
+                render: (targets: KnowledgePublishTarget[]) => renderPublishTargets(targets),
               },
               { title: '标题', dataIndex: 'title', ellipsis: true },
               {
@@ -479,16 +653,6 @@ export default function CurationPage() {
                 render: (p: string) => <Text code>{p}</Text>,
               },
               {
-                title: '风险标签',
-                dataIndex: 'riskFlags',
-                width: 230,
-                render: (raw?: string) => {
-                  const flags = parseEvidence(raw);
-                  if (!Array.isArray(flags)) return <Text type="secondary">-</Text>;
-                  return flags.map((flag) => <Tag key={String(flag)} color={flag === 'behavior_only' ? 'green' : 'volcano'}>{String(flag)}</Tag>);
-                },
-              },
-              {
                 title: '状态',
                 dataIndex: 'status',
                 width: 110,
@@ -502,17 +666,17 @@ export default function CurationPage() {
               },
               {
                 title: '操作',
-                width: 90,
-                render: (_, row) => <Button size="small" onClick={() => Modal.info({
-                  title: 'Hermes 自学习资产内容',
-                  width: 760,
-                  content: <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 520, overflow: 'auto', fontSize: 12 }}>{row.content || '（删除记录或内容为空）'}</pre>,
-                })}>查看</Button>,
+                width: 110,
+                render: (_, row) => (
+                  <Button size="small" onClick={() => setViewingHermes(row)}>
+                    查看处理
+                  </Button>
+                ),
               },
             ]}
           />
         ))}
-        {track === 'jobs' && (jobs.length === 0 ? (
+        {track === 'candidates' && candidateView === 'jobs' && (jobs.length === 0 ? (
           <Empty description="暂无 AI 学习任务记录" />
         ) : (
           <Table<LearningJob>
@@ -554,7 +718,7 @@ export default function CurationPage() {
             bordered={false}
           >
             <Paragraph type="secondary">
-              这里展示已人工审批发布的正式客服知识。候选知识和 Hermes 自学习审计记录在通过或转化前不会自动进入这里。
+              这里展示已人工审批发布的正式客服知识。候选知识和 Hermes 自学习审计记录在通过前不会自动进入这里。
             </Paragraph>
             <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 560, overflow: 'auto', fontSize: 13, margin: 0 }}>
               {approvedNotes || '（暂无正式知识；候选知识通过人工审批后会发布到这里）'}
@@ -562,6 +726,94 @@ export default function CurationPage() {
           </Card>
         )}
       </Card>
+
+      <Modal
+        title={viewingHermes?.assetType === 'skill' ? 'Skill 审计处理' : 'Memory 审计处理'}
+        open={!!viewingHermes}
+        width={900}
+        onCancel={() => setViewingHermes(null)}
+        footer={viewingHermes ? (
+          <Space wrap>
+            <Button onClick={() => setViewingHermes(null)}>关闭</Button>
+            {viewingHermes.status === 'pending_review' && (
+              <>
+                <Button
+                  type="primary"
+                  loading={reviewingHermesID === viewingHermes.id}
+                  onClick={() => reviewHermesAsset(viewingHermes, 'keep')}
+                >
+                  保留
+                </Button>
+                <Button
+                  loading={reviewingHermesID === viewingHermes.id}
+                  onClick={() => reviewHermesAsset(viewingHermes, 'modify')}
+                >
+                  保存修改并生效
+                </Button>
+                <Popconfirm
+                  title="删除 Hermes 自学习文件？"
+                  description="会删除磁盘上的对应文件，并把该审计记录标记为已删除。"
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => reviewHermesAsset(viewingHermes, 'delete')}
+                >
+                  <Button danger loading={reviewingHermesID === viewingHermes.id}>
+                    删除文件
+                  </Button>
+                </Popconfirm>
+              </>
+            )}
+          </Space>
+        ) : null}
+      >
+        {viewingHermes && (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Space wrap>
+              <Tag color={viewingHermes.assetType === 'skill' ? 'purple' : 'blue'}>{viewingHermes.assetType}</Tag>
+              <Tag>{viewingHermes.changeType}</Tag>
+              <Tag color={hermesStatusMeta[viewingHermes.status]?.color}>
+                {hermesStatusMeta[viewingHermes.status]?.label ?? viewingHermes.status}
+              </Tag>
+            </Space>
+            <Text code copyable style={{ whiteSpace: 'normal' }}>{viewingHermes.path}</Text>
+            {viewingHermes.status === 'pending_review' && (
+              <Card size="small" title="AI 辅助修改">
+                <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                  <Input.TextArea
+                    rows={2}
+                    value={hermesAIInstruction}
+                    onChange={(e) => setHermesAIInstruction(e.target.value)}
+                    placeholder="描述希望 AI 如何修改，例如：删除不确定的业务结论，补充适用范围，把语气改成客服可用的步骤说明"
+                  />
+                  <Button loading={hermesAILoading} onClick={assistHermesEdit}>
+                    AI 生成修订稿
+                  </Button>
+                </Space>
+              </Card>
+            )}
+            <Card size="small" title="人工编辑">
+              <Input.TextArea
+                rows={12}
+                value={hermesDraftContent}
+                onChange={(e) => setHermesDraftContent(e.target.value)}
+                disabled={viewingHermes.status !== 'pending_review'}
+              />
+            </Card>
+            <Card size="small" title="内容预览">
+              <div className="hermes-asset-preview markdown-body">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{hermesDraftContent}</ReactMarkdown>
+              </div>
+            </Card>
+            {viewingHermes.status === 'pending_review' && (
+              <Text type="secondary">
+                可以人工修改，也可以让 AI 生成修订稿；只有点击“保存修改并生效”才会写回 Hermes 文件。
+              </Text>
+            )}
+            {viewingHermes.reviewNote && <Text type="secondary">审计备注：{viewingHermes.reviewNote}</Text>}
+          </Space>
+        )}
+      </Modal>
 
       {/* 证据/详情 */}
       <Modal
@@ -574,6 +826,7 @@ export default function CurationPage() {
         {viewing && (
           <Space direction="vertical" style={{ width: '100%' }} size={8}>
             <Text strong>{viewing.title}</Text>
+            <Space wrap>{renderPublishTargets(viewing.publishTargets)}</Space>
             {viewing.question && <Text type="secondary">问题：{viewing.question}</Text>}
             <Card size="small" title="答案 / 内容">
               <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{viewing.content}</Paragraph>
@@ -607,15 +860,12 @@ export default function CurationPage() {
         {editing && (
           <Space direction="vertical" style={{ width: '100%' }} size={12}>
             <div>
-              <Text type="secondary">类型</Text>
-              <Select
-                style={{ width: '100%' }}
-                value={editing.assetType}
-                onChange={(v) => setEditing({ ...editing, assetType: v })}
-                options={[
-                  { value: 'faq', label: 'FAQ（标准问答）' },
-                  { value: 'wiki', label: 'Wiki（知识说明）' },
-                ]}
+              <Text type="secondary">发布目标</Text>
+              <br />
+              <Checkbox.Group
+                value={normalizePublishTargets(editing.publishTargets)}
+                options={publishTargetOptions}
+                onChange={(values) => setEditing({ ...editing, publishTargets: values as KnowledgePublishTarget[] })}
               />
             </div>
             <div>
@@ -623,7 +873,7 @@ export default function CurationPage() {
               <Input value={editing.title} onChange={(e) => setEditing({ ...editing, title: e.target.value })} />
             </div>
             <div>
-              <Text type="secondary">问题（FAQ 标准问法，可空）</Text>
+              <Text type="secondary">相关问题（可空）</Text>
               <Input
                 value={editing.question}
                 onChange={(e) => setEditing({ ...editing, question: e.target.value })}

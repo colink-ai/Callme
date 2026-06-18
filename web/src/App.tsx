@@ -13,6 +13,7 @@ import {
 } from '@ant-design/icons';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import Logo from './components/Logo';
+import AITaskPanel from './components/AITaskPanel';
 import AuthPage from './pages/Auth';
 import ChatPage from './pages/Chat';
 import CurationPage from './pages/Curation';
@@ -92,6 +93,7 @@ export default function App() {
   const usingRole = activeRole && roles.includes(activeRole as typeof roles[number]) ? activeRole : user?.role;
   const hasActiveRole = (role: string) => usingRole === role;
   const canManageKnowledge = hasActiveRole('admin') || hasActiveRole('knowledge_expert') || hasActiveRole('knowledge_staff');
+  const canUseInternalAITasks = canManageKnowledge;
   const allItems = [
     ...menuItems,
     ...(canManageKnowledge ? knowledgeMenuItems : []),
@@ -194,6 +196,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Routes>
       </Content>
+      {canUseInternalAITasks && <AITaskPanel />}
     </Layout>
   );
 }

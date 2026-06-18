@@ -2,14 +2,15 @@
 //
 // 链路（Phase 1：沙箱 + 审批闸门）：
 //
-//	用户点踩/纠错 -> 反馈入库 -> 定时蒸馏(单写者) -> 候选资产池(pending)
-//	  -> 管理员审批 -> 通过后发布到 HERMES_HOME/approved_knowledge.md(正式知识，生产 Agent 只读)
+//	用户点踩/纠错 -> 反馈入库 -> 定时蒸馏(单写者) -> 候选知识池(pending)
+//	  -> 管理员审批 -> 按发布目标写入本地知识 / Skill / 外部知识库
 //
 // 关键原则：任何会话提炼内容都不会自动进入生产回答链路；只有审批通过的资产才发布为正式知识，
-// 杜绝"错误知识自增强"。生产 Agent 仅参考 approved_knowledge.md，不读候选池。
+// 杜绝"错误知识自增强"。生产 Agent 仅参考审批发布后的知识，不读候选池。
 package feedback
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -66,9 +67,31 @@ type SubmitRequest struct {
 
 // ManualDraftRequest 管理员手动录入知识，由 AI 整理成候选资产。
 type ManualDraftRequest struct {
-	AssetType   model.CandidateAssetType `json:"assetType"`
-	Description string                   `json:"description"`
-	Images      []model.ImageContent     `json:"images,omitempty"`
+	PublishTargets []model.KnowledgePublishTarget `json:"publishTargets,omitempty"`
+	Description    string                         `json:"description"`
+	Images         []model.ImageContent           `json:"images,omitempty"`
+}
+
+// ReviewHermesLearningRequest 处理 Hermes 自学习审计记录。
+type ReviewHermesLearningRequest struct {
+	Action  string `json:"action"`
+	Note    string `json:"note"`
+	Content string `json:"content"`
+}
+
+// AssistHermesLearningEditRequest 用 AI 辅助修改 Hermes 自学习内容。
+type AssistHermesLearningEditRequest struct {
+	Instruction string `json:"instruction"`
+	Content     string `json:"content"`
+}
+
+// ManualDraftStreamEvent 人工录入知识流式生成事件。
+type ManualDraftStreamEvent struct {
+	Type      string                `json:"type"`
+	Delta     string                `json:"delta,omitempty"`
+	Content   string                `json:"content,omitempty"`
+	Candidate *model.CandidateAsset `json:"candidate,omitempty"`
+	Error     string                `json:"error,omitempty"`
 }
 
 // Submit 提交消息级反馈
@@ -156,18 +179,14 @@ func (s *Service) auditHermesLearning(ctx context.Context) error {
 		if ok {
 			changeType = model.HermesLearningChangeModified
 		}
-		riskFlags := classifyHermesLearningRisk(file.content)
-		if strings.Contains(path, string(filepath.Separator)+"_quarantine"+string(filepath.Separator)) {
-			riskFlags = append(riskFlags, "quarantined")
-		}
 		if err := s.store.CreateHermesLearningAsset(ctx, &model.HermesLearningAsset{
 			ID:          uuid.New().String(),
 			AssetType:   file.assetType,
 			Path:        path,
 			ContentHash: file.hash,
-			Content:     truncate(file.content, 20000),
+			Content:     "",
 			ChangeType:  changeType,
-			RiskFlags:   encodeRiskFlags(riskFlags),
+			RiskFlags:   "[]",
 			Status:      model.HermesLearningStatusPendingReview,
 			CreatedAt:   now,
 			UpdatedAt:   now,
@@ -191,7 +210,7 @@ func (s *Service) auditHermesLearning(ctx context.Context) error {
 			ContentHash: "",
 			Content:     "",
 			ChangeType:  model.HermesLearningChangeDeleted,
-			RiskFlags:   encodeRiskFlags([]string{"deleted"}),
+			RiskFlags:   "[]",
 			Status:      model.HermesLearningStatusPendingReview,
 			CreatedAt:   now,
 			UpdatedAt:   now,
@@ -241,12 +260,13 @@ func (s *Service) distillOnce(ctx context.Context) error {
 
 		title := truncate(question, 60)
 		if title == "" {
-			title = "未命名候选 FAQ"
+			title = "未命名候选知识"
 		}
 		now := time.Now()
 		cand := &model.CandidateAsset{
 			ID:               uuid.New().String(),
-			AssetType:        model.CandidateAssetFAQ, // 点踩纠错 → 标准问答候选
+			AssetType:        model.CandidateAssetKnowledge,
+			PublishTargets:   []model.KnowledgePublishTarget{model.KnowledgePublishLocal},
 			Title:            title,
 			Question:         question,
 			Content:          f.Correction,
@@ -325,10 +345,6 @@ func (s *Service) aiLearnFromHistory(ctx context.Context) error {
 		if c.Title == "" || c.Content == "" {
 			continue
 		}
-		assetType := model.CandidateAssetFAQ
-		if c.AssetType == string(model.CandidateAssetWiki) {
-			assetType = model.CandidateAssetWiki
-		}
 		evidence, _ := json.Marshal(map[string]any{
 			"source":       "ai_history_learning",
 			"learningJob":  job.ID,
@@ -338,7 +354,8 @@ func (s *Service) aiLearnFromHistory(ctx context.Context) error {
 		})
 		if err := s.store.CreateCandidate(ctx, &model.CandidateAsset{
 			ID:              uuid.New().String(),
-			AssetType:       assetType,
+			AssetType:       model.CandidateAssetKnowledge,
+			PublishTargets:  []model.KnowledgePublishTarget{model.KnowledgePublishLocal},
 			Title:           truncate(c.Title, 120),
 			Question:        truncate(c.Question, 500),
 			Content:         c.Content,
@@ -399,6 +416,135 @@ func (s *Service) ListHermesLearningAssets(ctx context.Context, status model.Her
 	return s.store.ListHermesLearningAssets(ctx, status, 200)
 }
 
+// ReviewHermesLearningAsset 处理 Hermes 自学习审计记录。
+func (s *Service) ReviewHermesLearningAsset(ctx context.Context, id string, req ReviewHermesLearningRequest, reviewer string) (*model.HermesLearningAsset, error) {
+	asset, err := s.store.GetHermesLearningAsset(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	req.Action = strings.TrimSpace(req.Action)
+	req.Note = strings.TrimSpace(req.Note)
+
+	status := model.HermesLearningStatus("")
+	switch req.Action {
+	case "keep":
+		status = model.HermesLearningStatusKept
+	case "delete":
+		if asset.ChangeType != model.HermesLearningChangeDeleted && asset.Path != "" {
+			if err := os.Remove(asset.Path); err != nil && !os.IsNotExist(err) {
+				return nil, fmt.Errorf("删除 Hermes 文件失败: %w", err)
+			}
+		}
+		status = model.HermesLearningStatusDeleted
+	case "modify":
+		content := strings.TrimSpace(req.Content)
+		if content == "" {
+			return nil, fmt.Errorf("修改内容不能为空")
+		}
+		if asset.Path == "" || asset.ChangeType == model.HermesLearningChangeDeleted {
+			return nil, fmt.Errorf("删除记录无法修改内容")
+		}
+		if err := os.WriteFile(asset.Path, []byte(content+"\n"), 0o644); err != nil {
+			return nil, fmt.Errorf("写入 Hermes 文件失败: %w", err)
+		}
+		sum := sha256.Sum256([]byte(content + "\n"))
+		hash := hex.EncodeToString(sum[:])
+		if err := s.store.UpdateHermesLearningAssetReviewWithHash(ctx, id, model.HermesLearningStatusModified, hash, reviewer, req.Note); err != nil {
+			return nil, err
+		}
+		asset.Status = model.HermesLearningStatusModified
+		asset.ContentHash = hash
+		asset.Content = content + "\n"
+		asset.Reviewer = reviewer
+		asset.ReviewNote = req.Note
+		asset.UpdatedAt = time.Now()
+		return asset, nil
+	default:
+		return nil, fmt.Errorf("不支持的审计动作")
+	}
+
+	if err := s.store.UpdateHermesLearningAssetReview(ctx, id, status, reviewer, req.Note); err != nil {
+		return nil, err
+	}
+	asset.Status = status
+	asset.Reviewer = reviewer
+	asset.ReviewNote = req.Note
+	asset.UpdatedAt = time.Now()
+	return asset, nil
+}
+
+func (s *Service) AssistHermesLearningEdit(ctx context.Context, id string, req AssistHermesLearningEditRequest) (string, error) {
+	asset, err := s.store.GetHermesLearningAsset(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	req.Instruction = strings.TrimSpace(req.Instruction)
+	if req.Instruction == "" {
+		return "", fmt.Errorf("请先输入修改要求")
+	}
+	content := strings.TrimSpace(req.Content)
+	if content == "" {
+		content = strings.TrimSpace(asset.Content)
+	}
+	if content == "" {
+		return "", fmt.Errorf("内容为空，无法辅助修改")
+	}
+	if s.agentSpec == nil {
+		return "", fmt.Errorf("未配置 AI 模型")
+	}
+	spec := s.agentSpec()
+	if spec.APIURL == "" || spec.APIToken == "" || spec.DefaultModel == "" {
+		return "", fmt.Errorf("未配置 API Base URL、Token 或模型")
+	}
+	return runAIHermesLearningEdit(ctx, spec, asset.AssetType, content, req.Instruction)
+}
+
+func (s *Service) AssistHermesLearningEditStream(ctx context.Context, id string, req AssistHermesLearningEditRequest, emit func(ManualDraftStreamEvent) error) error {
+	asset, err := s.store.GetHermesLearningAsset(ctx, id)
+	if err != nil {
+		return err
+	}
+	req.Instruction = strings.TrimSpace(req.Instruction)
+	if req.Instruction == "" {
+		return fmt.Errorf("请先输入修改要求")
+	}
+	content := strings.TrimSpace(req.Content)
+	if content == "" {
+		content = strings.TrimSpace(asset.Content)
+	}
+	if content == "" {
+		return fmt.Errorf("内容为空，无法辅助修改")
+	}
+	if s.agentSpec == nil {
+		return fmt.Errorf("未配置 AI 模型")
+	}
+	spec := s.agentSpec()
+	if spec.APIURL == "" || spec.APIToken == "" || spec.DefaultModel == "" {
+		return fmt.Errorf("未配置 API Base URL、Token 或模型")
+	}
+	raw := ""
+	result, err := runAIHermesLearningEditStream(ctx, spec, asset.AssetType, content, req.Instruction, func(delta string) error {
+		if delta == "" {
+			return nil
+		}
+		raw += delta
+		return emit(ManualDraftStreamEvent{Type: "delta", Delta: delta, Content: raw})
+	})
+	if err != nil {
+		if strings.TrimSpace(raw) != "" {
+			return err
+		}
+		if emitErr := emit(ManualDraftStreamEvent{Type: "status", Content: "流式连接中断，已切换为普通生成模式，请稍候。"}); emitErr != nil {
+			return emitErr
+		}
+		result, err = runAIHermesLearningEdit(ctx, spec, asset.AssetType, content, req.Instruction)
+		if err != nil {
+			return err
+		}
+	}
+	return emit(ManualDraftStreamEvent{Type: "done", Content: result})
+}
+
 // ListLearningJobs 列出 AI 学习任务执行历史。
 func (s *Service) ListLearningJobs(ctx context.Context) ([]*model.LearningJob, error) {
 	return s.store.ListLearningJobs(ctx, 100)
@@ -415,9 +561,7 @@ func (s *Service) CreateManualDraft(ctx context.Context, req ManualDraftRequest)
 	if req.Description == "" && len(req.Images) == 0 {
 		return nil, fmt.Errorf("请先输入知识描述或上传图片")
 	}
-	if req.AssetType != model.CandidateAssetFAQ && req.AssetType != model.CandidateAssetWiki {
-		req.AssetType = model.CandidateAssetWiki
-	}
+	req.PublishTargets = model.NormalizeKnowledgePublishTargets(req.PublishTargets)
 	if len(req.Images) > 5 {
 		return nil, fmt.Errorf("最多上传 5 张图片")
 	}
@@ -438,6 +582,10 @@ func (s *Service) CreateManualDraft(ctx context.Context, req ManualDraftRequest)
 	if err != nil {
 		return nil, err
 	}
+	return s.createCandidateFromManualDraft(ctx, req, draft)
+}
+
+func (s *Service) createCandidateFromManualDraft(ctx context.Context, req ManualDraftRequest, draft *aiLearningCandidate) (*model.CandidateAsset, error) {
 	now := time.Now()
 	evidence, _ := json.Marshal(map[string]any{
 		"source":      "manual_ai_draft",
@@ -446,16 +594,17 @@ func (s *Service) CreateManualDraft(ctx context.Context, req ManualDraftRequest)
 		"reason":      draft.Reason,
 	})
 	cand := &model.CandidateAsset{
-		ID:         uuid.New().String(),
-		AssetType:  req.AssetType,
-		Title:      truncate(draft.Title, 120),
-		Question:   truncate(draft.Question, 500),
-		Content:    strings.TrimSpace(draft.Content),
-		Evidence:   string(evidence),
-		Confidence: draft.Confidence,
-		Status:     model.CandidateStatusPending,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:             uuid.New().String(),
+		AssetType:      model.CandidateAssetKnowledge,
+		PublishTargets: req.PublishTargets,
+		Title:          truncate(draft.Title, 120),
+		Question:       truncate(draft.Question, 500),
+		Content:        strings.TrimSpace(draft.Content),
+		Evidence:       string(evidence),
+		Confidence:     draft.Confidence,
+		Status:         model.CandidateStatusPending,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if cand.Title == "" {
 		cand.Title = "人工录入知识"
@@ -475,6 +624,56 @@ func (s *Service) CreateManualDraft(ctx context.Context, req ManualDraftRequest)
 	return cand, nil
 }
 
+// CreateManualDraftStream 流式生成候选知识，并在完成后写入候选池。
+func (s *Service) CreateManualDraftStream(ctx context.Context, req ManualDraftRequest, emit func(ManualDraftStreamEvent) error) error {
+	req.Description = strings.TrimSpace(req.Description)
+	if req.Description == "" && len(req.Images) == 0 {
+		return fmt.Errorf("请先输入知识描述或上传图片")
+	}
+	req.PublishTargets = model.NormalizeKnowledgePublishTargets(req.PublishTargets)
+	if len(req.Images) > 5 {
+		return fmt.Errorf("最多上传 5 张图片")
+	}
+	for _, img := range req.Images {
+		if !strings.HasPrefix(img.MimeType, "image/") || img.Data == "" {
+			return fmt.Errorf("图片参数无效")
+		}
+	}
+	if s.agentSpec == nil {
+		return fmt.Errorf("未配置 AI 模型")
+	}
+	spec := s.agentSpec()
+	if spec.APIURL == "" || spec.APIToken == "" || spec.DefaultModel == "" {
+		return fmt.Errorf("未配置 API Base URL、Token 或模型")
+	}
+	raw := ""
+	draft, raw, err := runAIManualDraftStream(ctx, spec, req, func(delta string) error {
+		if delta == "" {
+			return nil
+		}
+		raw += delta
+		return emit(ManualDraftStreamEvent{Type: "delta", Delta: delta, Content: raw})
+	})
+	if err != nil {
+		if strings.TrimSpace(raw) != "" {
+			return err
+		}
+		if emitErr := emit(ManualDraftStreamEvent{Type: "status", Content: "流式连接中断，已切换为普通生成模式，请稍候。"}); emitErr != nil {
+			return emitErr
+		}
+		draft, err = runAIManualDraft(ctx, spec, req)
+		if err != nil {
+			return err
+		}
+		raw = aiManualDraftDisplayContent(draft)
+	}
+	cand, err := s.createCandidateFromManualDraft(ctx, req, draft)
+	if err != nil {
+		return err
+	}
+	return emit(ManualDraftStreamEvent{Type: "done", Content: raw, Candidate: cand})
+}
+
 // UpdateCandidate 编辑待审批候选资产的内容
 func (s *Service) UpdateCandidate(ctx context.Context, id string, in *model.CandidateAsset) (*model.CandidateAsset, error) {
 	cand, err := s.store.GetCandidate(ctx, id)
@@ -486,6 +685,9 @@ func (s *Service) UpdateCandidate(ctx context.Context, id string, in *model.Cand
 	}
 	if in.AssetType != "" {
 		cand.AssetType = in.AssetType
+	}
+	if len(in.PublishTargets) > 0 {
+		cand.PublishTargets = model.NormalizeKnowledgePublishTargets(in.PublishTargets)
 	}
 	if in.Title != "" {
 		cand.Title = in.Title
@@ -511,7 +713,7 @@ func (s *Service) ReviewCandidate(ctx context.Context, id string, approve bool, 
 	cand.ReviewNote = strings.TrimSpace(note)
 	if approve {
 		cand.Status = model.CandidateStatusApproved
-		// 仅在审批通过时由发布动作写入正式知识（生产 Agent 只读此文件）
+		// 仅在审批通过时由发布动作写入正式知识（生产 Agent 只读发布后的知识）
 		if err := s.publishApproved(cand); err != nil {
 			return nil, fmt.Errorf("发布正式知识失败: %w", err)
 		}
@@ -526,6 +728,25 @@ func (s *Service) ReviewCandidate(ctx context.Context, id string, approve bool, 
 
 // publishApproved 把审批通过的资产追加到 HERMES_HOME/approved_knowledge.md
 func (s *Service) publishApproved(a *model.CandidateAsset) error {
+	targets := model.NormalizeKnowledgePublishTargets(a.PublishTargets)
+	for _, target := range targets {
+		switch target {
+		case model.KnowledgePublishLocal:
+			if err := s.publishApprovedLocal(a); err != nil {
+				return err
+			}
+		case model.KnowledgePublishSkill:
+			if err := s.publishApprovedSkill(a); err != nil {
+				return err
+			}
+		case model.KnowledgePublishKnowledgeBase:
+			return fmt.Errorf("外部知识库写入器暂未配置")
+		}
+	}
+	return nil
+}
+
+func (s *Service) publishApprovedLocal(a *model.CandidateAsset) error {
 	if err := os.MkdirAll(s.hermesHome, 0o755); err != nil {
 		return err
 	}
@@ -535,11 +756,7 @@ func (s *Service) publishApproved(a *model.CandidateAsset) error {
 	if content == "" {
 		content = "# 正式知识（经人工审批发布，回答相关问题时可参考；每条均有来源依据）\n\n"
 	}
-	kind := "FAQ"
-	if a.AssetType == model.CandidateAssetWiki {
-		kind = "Wiki"
-	}
-	entry := fmt.Sprintf("## [%s] %s\n", kind, a.Title)
+	entry := fmt.Sprintf("## %s\n", a.Title)
 	if a.Question != "" {
 		entry += fmt.Sprintf("- 问题：%s\n", a.Question)
 	}
@@ -547,6 +764,30 @@ func (s *Service) publishApproved(a *model.CandidateAsset) error {
 		a.Content, a.Reviewer, time.Now().Format("2006-01-02 15:04"))
 	content += "\n" + entry
 	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func (s *Service) publishApprovedSkill(a *model.CandidateAsset) error {
+	name := knowledgeSlug(a.Title)
+	if name == "" {
+		name = a.ID
+	}
+	dir := filepath.Join(s.hermesHome, "skills", "callme-approved", name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	body := fmt.Sprintf(`# %s
+
+Use this skill when the user asks about this approved Callme knowledge.
+
+## Approved Knowledge
+
+`, a.Title)
+	if a.Question != "" {
+		body += fmt.Sprintf("Question: %s\n\n", a.Question)
+	}
+	body += strings.TrimSpace(a.Content)
+	body += fmt.Sprintf("\n\n---\nApproved by %s at %s.\n", a.Reviewer, time.Now().Format("2006-01-02 15:04"))
+	return os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644)
 }
 
 // findUserQuestion 找到该助手回答对应的上一条用户提问
@@ -589,6 +830,28 @@ func truncate(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
+func knowledgeSlug(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		case r >= '\u4e00' && r <= '\u9fff':
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if !lastDash && b.Len() > 0 {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	return strings.Trim(truncate(b.String(), 80), "-")
+}
+
 type hermesLearningFile struct {
 	assetType model.HermesLearningAssetType
 	hash      string
@@ -597,116 +860,71 @@ type hermesLearningFile struct {
 
 func scanHermesLearningFiles(home string) (map[string]hermesLearningFile, error) {
 	result := map[string]hermesLearningFile{}
-	for _, spec := range []struct {
-		dir       string
+	roots := []struct {
+		root      string
 		assetType model.HermesLearningAssetType
 	}{
-		{dir: "skills", assetType: model.HermesLearningAssetSkill},
-		{dir: "memories", assetType: model.HermesLearningAssetMemory},
-	} {
-		for _, root := range hermesLearningRoots(home, spec.dir) {
-			info, err := os.Stat(root)
-			if err != nil || !info.IsDir() {
-				continue
-			}
-			if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-				if walkErr != nil || d.IsDir() || strings.HasSuffix(path, ".lock") {
-					return nil
-				}
-				data, err := os.ReadFile(path)
-				if err != nil {
-					return nil
-				}
-				sum := sha256.Sum256(data)
-				abs, err := filepath.Abs(path)
-				if err != nil {
-					abs = path
-				}
-				result[abs] = hermesLearningFile{
-					assetType: spec.assetType,
-					hash:      hex.EncodeToString(sum[:]),
-					content:   string(data),
-				}
+		{root: filepath.Join(home, "skills"), assetType: model.HermesLearningAssetSkill},
+		{root: filepath.Join(home, "memories"), assetType: model.HermesLearningAssetMemory},
+	}
+	for _, spec := range roots {
+		info, err := os.Stat(spec.root)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if err := filepath.WalkDir(spec.root, func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil || d.IsDir() || !isHermesLearningAssetFile(spec.root, path, spec.assetType) {
 				return nil
-			}); err != nil {
-				return nil, err
 			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			sum := sha256.Sum256(data)
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				abs = path
+			}
+			result[abs] = hermesLearningFile{
+				assetType: spec.assetType,
+				hash:      hex.EncodeToString(sum[:]),
+				content:   string(data),
+			}
+			return nil
+		}); err != nil {
+			return nil, err
 		}
 	}
 	return result, nil
 }
 
-func hermesLearningRoots(home, dir string) []string {
-	roots := []string{filepath.Join(home, dir)}
-	quarantine := filepath.Join(home, "_quarantine")
-	entries, err := os.ReadDir(quarantine)
-	if err != nil {
-		return roots
+func isHermesLearningAssetFile(root, path string, assetType model.HermesLearningAssetType) bool {
+	if strings.HasSuffix(path, ".lock") {
+		return false
 	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			roots = append(roots, filepath.Join(quarantine, entry.Name(), dir))
+	base := filepath.Base(path)
+	if strings.HasPrefix(base, ".") {
+		return false
+	}
+	switch assetType {
+	case model.HermesLearningAssetSkill:
+		// Hermes skill 是一个目录资产，只有根 SKILL.md 才代表这个 skill。
+		return base == "SKILL.md"
+	case model.HermesLearningAssetMemory:
+		if filepath.Ext(base) != ".md" {
+			return false
 		}
-	}
-	return roots
-}
-
-func classifyHermesLearningRisk(content string) []string {
-	lower := strings.ToLower(content)
-	flags := map[string]struct{}{}
-	add := func(flag string) { flags[flag] = struct{}{} }
-
-	for _, marker := range []string{"api_key", "apikey", "token", "password", "secret", "bearer ", "authorization"} {
-		if strings.Contains(lower, marker) {
-			add("contains_sensitive_data")
-			break
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return false
 		}
+		return !strings.Contains(rel, string(filepath.Separator))
+	default:
+		return false
 	}
-	for _, marker := range []string{"客户", "用户", "手机号", "邮箱", "工单", "tenant", "customer"} {
-		if strings.Contains(lower, strings.ToLower(marker)) {
-			add("contains_customer_context")
-			break
-		}
-	}
-	for _, marker := range []string{"价格", "计费", "权限", "合规", "sla", "版本", "配置", "必须", "不能"} {
-		if strings.Contains(lower, strings.ToLower(marker)) {
-			add("contains_business_fact")
-			break
-		}
-	}
-	for _, marker := range []string{"根因", "原因", "导致", "报错", "故障", "token expired", "timeout"} {
-		if strings.Contains(lower, strings.ToLower(marker)) {
-			add("diagnostic_claim")
-			break
-		}
-	}
-	for _, marker := range []string{"通常", "一定", "总是", "所有", "必然", "never", "always"} {
-		if strings.Contains(lower, strings.ToLower(marker)) {
-			add("over_generalized")
-			break
-		}
-	}
-
-	if len(flags) == 0 {
-		return []string{"behavior_only"}
-	}
-	out := make([]string, 0, len(flags))
-	for flag := range flags {
-		out = append(out, flag)
-	}
-	return out
-}
-
-func encodeRiskFlags(flags []string) string {
-	data, err := json.Marshal(flags)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
 }
 
 type aiLearningCandidate struct {
-	AssetType  string  `json:"assetType"`
 	Title      string  `json:"title"`
 	Question   string  `json:"question"`
 	Content    string  `json:"content"`
@@ -725,11 +943,11 @@ func runAILearning(ctx context.Context, spec agent.AgentSpec, transcript string)
 		"messages": []map[string]string{
 			{
 				"role":    "system",
-				"content": "你是 Callme 的客服知识沉淀助手。只能基于给定历史会话提出候选知识建议，不要编造事实。输出严格 JSON，格式为 {\"candidates\":[{\"assetType\":\"faq|wiki\",\"title\":\"...\",\"question\":\"...\",\"content\":\"...\",\"confidence\":0.0,\"reason\":\"...\"}]}。只输出证据充分、可复用的候选，最多 5 条。",
+				"content": "你是 Callme 的客服知识沉淀助手。只能基于给定历史会话提出候选知识建议，不要编造事实。输出严格 JSON，格式为 {\"candidates\":[{\"title\":\"...\",\"question\":\"...\",\"content\":\"...\",\"confidence\":0.0,\"reason\":\"...\"}]}。只输出证据充分、可复用的候选，最多 5 条。",
 			},
 			{
 				"role":    "user",
-				"content": "请从以下历史会话中挖掘可进入候选知识池的 FAQ 或 Wiki。所有建议仍需人工审批。\n\n" + transcript,
+				"content": "请从以下历史会话中挖掘可进入候选知识池的知识。所有建议仍需人工审批。\n\n" + transcript,
 			},
 		},
 		"temperature": 0.2,
@@ -791,36 +1009,10 @@ func runAILearning(ctx context.Context, spec agent.AgentSpec, transcript string)
 
 func runAIManualDraft(ctx context.Context, spec agent.AgentSpec, req ManualDraftRequest) (*aiLearningCandidate, error) {
 	baseURL := strings.TrimRight(spec.APIURL, "/")
-	content := []map[string]any{
-		{
-			"type": "text",
-			"text": "请把管理员提供的原始描述整理成一篇完整、可审批的客服知识。只基于输入内容和图片，不要编造事实。输出严格 JSON，格式为 {\"assetType\":\"faq|wiki\",\"title\":\"...\",\"question\":\"...\",\"content\":\"...\",\"confidence\":0.0,\"reason\":\"...\"}。content 使用 Markdown，结构清晰，包含适用场景、处理步骤、注意事项；如果证据不足，要在内容里标注待确认点。",
-		},
-		{
-			"type": "text",
-			"text": fmt.Sprintf("目标类型：%s\n原始描述：\n%s", req.AssetType, req.Description),
-		},
-	}
-	for _, img := range req.Images {
-		content = append(content, map[string]any{
-			"type": "image_url",
-			"image_url": map[string]any{
-				"url": fmt.Sprintf("data:%s;base64,%s", img.MimeType, img.Data),
-			},
-		})
-	}
+	messages := buildManualDraftMessages(req)
 	reqBody := map[string]any{
-		"model": spec.DefaultModel,
-		"messages": []map[string]any{
-			{
-				"role":    "system",
-				"content": "你是 Callme 的人工知识录入助手，负责把管理员的零散描述和图片整理为待审批知识草稿。",
-			},
-			{
-				"role":    "user",
-				"content": content,
-			},
-		},
+		"model":       spec.DefaultModel,
+		"messages":    messages,
 		"temperature": 0.2,
 	}
 	data, err := json.Marshal(reqBody)
@@ -855,7 +1047,46 @@ func runAIManualDraft(ctx context.Context, spec agent.AgentSpec, req ManualDraft
 	if len(parsed.Choices) == 0 {
 		return nil, fmt.Errorf("人工知识整理没有返回内容")
 	}
-	contentText := strings.TrimSpace(parsed.Choices[0].Message.Content)
+	out, err := parseAIManualDraftContent(parsed.Choices[0].Message.Content)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func buildManualDraftMessages(req ManualDraftRequest) []map[string]any {
+	content := []map[string]any{
+		{
+			"type": "text",
+			"text": "请把管理员提供的原始描述整理成一篇完整、可审批的客服知识。只基于输入内容和图片，不要编造事实。输出严格 JSON，格式为 {\"title\":\"...\",\"question\":\"...\",\"content\":\"...\",\"confidence\":0.0,\"reason\":\"...\"}。content 使用 Markdown，结构清晰，包含适用场景、处理步骤、注意事项；如果证据不足，要在内容里标注待确认点。",
+		},
+		{
+			"type": "text",
+			"text": fmt.Sprintf("发布目标：%v\n原始描述：\n%s", req.PublishTargets, req.Description),
+		},
+	}
+	for _, img := range req.Images {
+		content = append(content, map[string]any{
+			"type": "image_url",
+			"image_url": map[string]any{
+				"url": fmt.Sprintf("data:%s;base64,%s", img.MimeType, img.Data),
+			},
+		})
+	}
+	return []map[string]any{
+		{
+			"role":    "system",
+			"content": "你是 Callme 的人工知识录入助手，负责把管理员的零散描述和图片整理为待审批知识草稿。",
+		},
+		{
+			"role":    "user",
+			"content": content,
+		},
+	}
+}
+
+func parseAIManualDraftContent(contentText string) (*aiLearningCandidate, error) {
+	contentText = strings.TrimSpace(contentText)
 	contentText = strings.TrimPrefix(contentText, "```json")
 	contentText = strings.TrimPrefix(contentText, "```")
 	contentText = strings.TrimSuffix(contentText, "```")
@@ -865,6 +1096,255 @@ func runAIManualDraft(ctx context.Context, spec agent.AgentSpec, req ManualDraft
 		return nil, fmt.Errorf("解析人工知识整理结果失败: %w", err)
 	}
 	return &out, nil
+}
+
+func aiManualDraftDisplayContent(draft *aiLearningCandidate) string {
+	if draft == nil {
+		return ""
+	}
+	data, err := json.MarshalIndent(draft, "", "  ")
+	if err != nil {
+		return strings.TrimSpace(draft.Content)
+	}
+	return string(data)
+}
+
+func runAIManualDraftStream(ctx context.Context, spec agent.AgentSpec, req ManualDraftRequest, onDelta func(string) error) (*aiLearningCandidate, string, error) {
+	baseURL := strings.TrimRight(spec.APIURL, "/")
+	reqBody := map[string]any{
+		"model":       spec.DefaultModel,
+		"messages":    buildManualDraftMessages(req),
+		"temperature": 0.2,
+		"stream":      true,
+	}
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, "", err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(data))
+	if err != nil {
+		return nil, "", err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+spec.APIToken)
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("人工知识整理请求失败: HTTP %d", resp.StatusCode)
+	}
+
+	var raw strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, ":") {
+			continue
+		}
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			break
+		}
+		delta := parseOpenAIStreamDelta(payload)
+		if delta == "" {
+			continue
+		}
+		raw.WriteString(delta)
+		if onDelta != nil {
+			if err := onDelta(delta); err != nil {
+				return nil, raw.String(), err
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, raw.String(), err
+	}
+	content := raw.String()
+	draft, err := parseAIManualDraftContent(content)
+	if err != nil {
+		return nil, content, err
+	}
+	return draft, content, nil
+}
+
+func parseOpenAIStreamDelta(payload string) string {
+	var chunk struct {
+		Choices []struct {
+			Delta struct {
+				Content any `json:"content"`
+			} `json:"delta"`
+			Message struct {
+				Content any `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(payload), &chunk); err != nil || len(chunk.Choices) == 0 {
+		return ""
+	}
+	content := chunk.Choices[0].Delta.Content
+	if content == nil {
+		content = chunk.Choices[0].Message.Content
+	}
+	switch v := content.(type) {
+	case string:
+		return v
+	case []any:
+		var b strings.Builder
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				if text, ok := m["text"].(string); ok {
+					b.WriteString(text)
+				}
+			}
+		}
+		return b.String()
+	default:
+		return ""
+	}
+}
+
+func runAIHermesLearningEdit(ctx context.Context, spec agent.AgentSpec, assetType model.HermesLearningAssetType, content, instruction string) (string, error) {
+	baseURL := strings.TrimRight(spec.APIURL, "/")
+	reqBody := map[string]any{
+		"model":       spec.DefaultModel,
+		"messages":    buildHermesLearningEditMessages(assetType, content, instruction),
+		"temperature": 0.2,
+	}
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+spec.APIToken)
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("Hermes 自学习内容辅助修改失败: HTTP %d", resp.StatusCode)
+	}
+	var parsed struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", err
+	}
+	if len(parsed.Choices) == 0 {
+		return "", fmt.Errorf("AI 没有返回修订内容")
+	}
+	out := strings.TrimSpace(parsed.Choices[0].Message.Content)
+	out = strings.TrimPrefix(out, "```markdown")
+	out = strings.TrimPrefix(out, "```md")
+	out = strings.TrimPrefix(out, "```")
+	out = strings.TrimSuffix(out, "```")
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return "", fmt.Errorf("AI 返回内容为空")
+	}
+	return out, nil
+}
+
+func buildHermesLearningEditMessages(assetType model.HermesLearningAssetType, content, instruction string) []map[string]string {
+	return []map[string]string{
+		{
+			"role":    "system",
+			"content": "你是 Callme 的 Hermes 自学习审计助手。你只负责根据人工修改要求修订给定 Markdown 文件，不能编造事实，不能添加未提供的业务结论。只输出修订后的 Markdown 原文，不要输出解释、不要包裹代码块。",
+		},
+		{
+			"role": "user",
+			"content": fmt.Sprintf(`资产类型：%s
+
+人工修改要求：
+%s
+
+原始 Markdown：
+%s`, assetType, instruction, content),
+		},
+	}
+}
+
+func runAIHermesLearningEditStream(ctx context.Context, spec agent.AgentSpec, assetType model.HermesLearningAssetType, content, instruction string, onDelta func(string) error) (string, error) {
+	baseURL := strings.TrimRight(spec.APIURL, "/")
+	reqBody := map[string]any{
+		"model":       spec.DefaultModel,
+		"messages":    buildHermesLearningEditMessages(assetType, content, instruction),
+		"temperature": 0.2,
+		"stream":      true,
+	}
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+spec.APIToken)
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("Hermes 自学习内容辅助修改失败: HTTP %d", resp.StatusCode)
+	}
+	var raw strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, ":") || !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			break
+		}
+		delta := parseOpenAIStreamDelta(payload)
+		if delta == "" {
+			continue
+		}
+		raw.WriteString(delta)
+		if onDelta != nil {
+			if err := onDelta(delta); err != nil {
+				return raw.String(), err
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return raw.String(), err
+	}
+	out := strings.TrimSpace(raw.String())
+	out = strings.TrimPrefix(out, "```markdown")
+	out = strings.TrimPrefix(out, "```md")
+	out = strings.TrimPrefix(out, "```")
+	out = strings.TrimSuffix(out, "```")
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return "", fmt.Errorf("AI 返回内容为空")
+	}
+	return out, nil
 }
 
 func firstString(values []string) string {

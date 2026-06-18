@@ -134,12 +134,14 @@ export interface Ticket {
   createdAt: string;
 }
 
-export type CandidateAssetType = 'faq' | 'wiki';
+export type CandidateAssetType = 'knowledge' | 'faq' | 'wiki';
 export type CandidateAssetStatus = 'pending' | 'approved' | 'rejected';
+export type KnowledgePublishTarget = 'local' | 'skill' | 'knowledge_base';
 
 export interface CandidateAsset {
   id: string;
   assetType: CandidateAssetType;
+  publishTargets?: KnowledgePublishTarget[];
   title: string;
   question?: string;
   content: string;

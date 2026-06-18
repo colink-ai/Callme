@@ -239,13 +239,43 @@ type Ticket struct {
 	CreatedAt  time.Time    `json:"createdAt"`
 }
 
-// CandidateAssetType 候选资产类型
+// CandidateAssetType 候选资产类型。历史上曾区分 faq/wiki；新候选统一使用 knowledge。
 type CandidateAssetType string
 
 const (
-	CandidateAssetFAQ  CandidateAssetType = "faq"  // 高频标准问答
-	CandidateAssetWiki CandidateAssetType = "wiki" // 稳定知识/说明
+	CandidateAssetKnowledge CandidateAssetType = "knowledge"
+	CandidateAssetFAQ       CandidateAssetType = "faq"  // 兼容旧数据
+	CandidateAssetWiki      CandidateAssetType = "wiki" // 兼容旧数据
 )
+
+type KnowledgePublishTarget string
+
+const (
+	KnowledgePublishLocal         KnowledgePublishTarget = "local"
+	KnowledgePublishSkill         KnowledgePublishTarget = "skill"
+	KnowledgePublishKnowledgeBase KnowledgePublishTarget = "knowledge_base"
+)
+
+func NormalizeKnowledgePublishTargets(targets []KnowledgePublishTarget) []KnowledgePublishTarget {
+	seen := map[KnowledgePublishTarget]struct{}{}
+	out := make([]KnowledgePublishTarget, 0, len(targets))
+	for _, target := range targets {
+		switch target {
+		case KnowledgePublishLocal, KnowledgePublishSkill, KnowledgePublishKnowledgeBase:
+		default:
+			continue
+		}
+		if _, ok := seen[target]; ok {
+			continue
+		}
+		seen[target] = struct{}{}
+		out = append(out, target)
+	}
+	if len(out) == 0 {
+		out = append(out, KnowledgePublishLocal)
+	}
+	return out
+}
 
 // CandidateAssetStatus 候选资产审批状态
 type CandidateAssetStatus string
@@ -258,20 +288,21 @@ const (
 
 // CandidateAsset 候选知识资产（自学习沙箱产物，审批后才进入正式知识）
 type CandidateAsset struct {
-	ID               string               `json:"id"`
-	AssetType        CandidateAssetType   `json:"assetType"`
-	Title            string               `json:"title"`
-	Question         string               `json:"question,omitempty"`
-	Content          string               `json:"content"`
-	Evidence         string               `json:"evidence,omitempty"` // JSON：来源会话/消息摘要/纠错
-	SourceSessionID  string               `json:"sourceSessionId,omitempty"`
-	SourceFeedbackID string               `json:"sourceFeedbackId,omitempty"`
-	Confidence       float64              `json:"confidence"`
-	Status           CandidateAssetStatus `json:"status"`
-	Reviewer         string               `json:"reviewer,omitempty"`
-	ReviewNote       string               `json:"reviewNote,omitempty"`
-	CreatedAt        time.Time            `json:"createdAt"`
-	UpdatedAt        time.Time            `json:"updatedAt"`
+	ID               string                   `json:"id"`
+	AssetType        CandidateAssetType       `json:"assetType"`
+	PublishTargets   []KnowledgePublishTarget `json:"publishTargets,omitempty"`
+	Title            string                   `json:"title"`
+	Question         string                   `json:"question,omitempty"`
+	Content          string                   `json:"content"`
+	Evidence         string                   `json:"evidence,omitempty"` // JSON：来源会话/消息摘要/纠错
+	SourceSessionID  string                   `json:"sourceSessionId,omitempty"`
+	SourceFeedbackID string                   `json:"sourceFeedbackId,omitempty"`
+	Confidence       float64                  `json:"confidence"`
+	Status           CandidateAssetStatus     `json:"status"`
+	Reviewer         string                   `json:"reviewer,omitempty"`
+	ReviewNote       string                   `json:"reviewNote,omitempty"`
+	CreatedAt        time.Time                `json:"createdAt"`
+	UpdatedAt        time.Time                `json:"updatedAt"`
 }
 
 // HermesLearningAssetType Hermes 自学习资产类型

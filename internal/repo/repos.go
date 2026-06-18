@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -700,11 +701,12 @@ func (s *Store) PutSetting(ctx context.Context, key string, val any) error {
 
 // CreateCandidate 写入候选资产
 func (s *Store) CreateCandidate(ctx context.Context, a *model.CandidateAsset) error {
+	targets := encodePublishTargets(a.PublishTargets)
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO candidate_assets
-		 (id, asset_type, title, question, content, evidence, source_session_id, source_feedback_id, confidence, status, reviewer, review_note, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.ID, a.AssetType, a.Title, a.Question, a.Content, a.Evidence, a.SourceSessionID, a.SourceFeedbackID,
+		 (id, asset_type, publish_targets, title, question, content, evidence, source_session_id, source_feedback_id, confidence, status, reviewer, review_note, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.AssetType, targets, a.Title, a.Question, a.Content, a.Evidence, a.SourceSessionID, a.SourceFeedbackID,
 		a.Confidence, a.Status, a.Reviewer, a.ReviewNote, a.CreatedAt, a.UpdatedAt)
 	return err
 }
@@ -712,7 +714,7 @@ func (s *Store) CreateCandidate(ctx context.Context, a *model.CandidateAsset) er
 // GetCandidate 按 ID 查询候选资产
 func (s *Store) GetCandidate(ctx context.Context, id string) (*model.CandidateAsset, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, asset_type, title, question, content, evidence, source_session_id, source_feedback_id, confidence, status, reviewer, review_note, created_at, updated_at
+		`SELECT id, asset_type, publish_targets, title, question, content, evidence, source_session_id, source_feedback_id, confidence, status, reviewer, review_note, created_at, updated_at
 		 FROM candidate_assets WHERE id=?`, id)
 	return scanCandidate(row)
 }
@@ -726,7 +728,7 @@ func (s *Store) ListCandidates(ctx context.Context, status model.CandidateAssetS
 		rows *sql.Rows
 		err  error
 	)
-	base := `SELECT id, asset_type, title, question, content, evidence, source_session_id, source_feedback_id, confidence, status, reviewer, review_note, created_at, updated_at FROM candidate_assets`
+	base := `SELECT id, asset_type, publish_targets, title, question, content, evidence, source_session_id, source_feedback_id, confidence, status, reviewer, review_note, created_at, updated_at FROM candidate_assets`
 	if status == "" {
 		rows, err = s.db.QueryContext(ctx, base+` ORDER BY created_at DESC LIMIT ?`, limit)
 	} else {
@@ -750,11 +752,12 @@ func (s *Store) ListCandidates(ctx context.Context, status model.CandidateAssetS
 // UpdateCandidate 更新候选资产可编辑字段与审批状态
 func (s *Store) UpdateCandidate(ctx context.Context, a *model.CandidateAsset) error {
 	a.UpdatedAt = time.Now()
+	targets := encodePublishTargets(a.PublishTargets)
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE candidate_assets
-		 SET asset_type=?, title=?, question=?, content=?, status=?, reviewer=?, review_note=?, updated_at=?
+		 SET asset_type=?, publish_targets=?, title=?, question=?, content=?, status=?, reviewer=?, review_note=?, updated_at=?
 		 WHERE id=?`,
-		a.AssetType, a.Title, a.Question, a.Content, a.Status, a.Reviewer, a.ReviewNote, a.UpdatedAt, a.ID)
+		a.AssetType, targets, a.Title, a.Question, a.Content, a.Status, a.Reviewer, a.ReviewNote, a.UpdatedAt, a.ID)
 	return err
 }
 
@@ -767,16 +770,34 @@ func (s *Store) CountCandidatesByStatus(ctx context.Context, status model.Candid
 
 func scanCandidate(r rowScanner) (*model.CandidateAsset, error) {
 	var a model.CandidateAsset
-	var question, evidence, reviewNote sql.NullString
-	if err := r.Scan(&a.ID, &a.AssetType, &a.Title, &question, &a.Content, &evidence,
+	var question, evidence, reviewNote, publishTargets sql.NullString
+	if err := r.Scan(&a.ID, &a.AssetType, &publishTargets, &a.Title, &question, &a.Content, &evidence,
 		&a.SourceSessionID, &a.SourceFeedbackID, &a.Confidence, &a.Status, &a.Reviewer, &reviewNote,
 		&a.CreatedAt, &a.UpdatedAt); err != nil {
 		return nil, err
 	}
+	a.PublishTargets = decodePublishTargets(publishTargets.String)
 	a.Question = question.String
 	a.Evidence = evidence.String
 	a.ReviewNote = reviewNote.String
 	return &a, nil
+}
+
+func encodePublishTargets(targets []model.KnowledgePublishTarget) string {
+	targets = model.NormalizeKnowledgePublishTargets(targets)
+	data, err := json.Marshal(targets)
+	if err != nil {
+		return `["local"]`
+	}
+	return string(data)
+}
+
+func decodePublishTargets(raw string) []model.KnowledgePublishTarget {
+	var targets []model.KnowledgePublishTarget
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &targets)
+	}
+	return model.NormalizeKnowledgePublishTargets(targets)
 }
 
 // ---------- hermes_learning_assets（Hermes 自学习审计轨） ----------
@@ -796,6 +817,18 @@ func (s *Store) LatestHermesLearningAssetByPath(ctx context.Context, path string
 		`SELECT id, asset_type, path, content_hash, content, change_type, risk_flags, status, reviewer, review_note, created_at, updated_at
 		 FROM hermes_learning_assets WHERE path=? ORDER BY created_at DESC LIMIT 1`, path)
 	return scanHermesLearningAsset(row)
+}
+
+func (s *Store) GetHermesLearningAsset(ctx context.Context, id string) (*model.HermesLearningAsset, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, asset_type, path, content_hash, content, change_type, risk_flags, status, reviewer, review_note, created_at, updated_at
+		 FROM hermes_learning_assets WHERE id=?`, id)
+	a, err := scanHermesLearningAsset(row)
+	if err != nil {
+		return nil, err
+	}
+	hydrateHermesLearningContent(a)
+	return a, nil
 }
 
 func (s *Store) ListLatestHermesLearningAssets(ctx context.Context) (map[string]*model.HermesLearningAsset, error) {
@@ -827,15 +860,20 @@ func (s *Store) ListHermesLearningAssets(ctx context.Context, status model.Herme
 	if limit <= 0 {
 		limit = 200
 	}
-	base := `SELECT id, asset_type, path, content_hash, content, change_type, risk_flags, status, reviewer, review_note, created_at, updated_at FROM hermes_learning_assets`
+	base := `SELECT id, asset_type, path, content_hash, content, change_type, risk_flags, status, reviewer, review_note, created_at, updated_at FROM hermes_learning_assets WHERE 1=1`
 	var (
 		rows *sql.Rows
 		err  error
 	)
+	invalid := ` AND path NOT LIKE '%/_quarantine/%'
+		AND path NOT LIKE '%/skills/.%'
+		AND path NOT LIKE '%/skills/%/references/%'
+		AND (asset_type != 'skill' OR path LIKE '%/SKILL.md')
+		AND (asset_type != 'memory' OR (path LIKE '%.md' AND path NOT LIKE '%.lock'))`
 	if status == "" {
-		rows, err = s.db.QueryContext(ctx, base+` ORDER BY created_at DESC LIMIT ?`, limit)
+		rows, err = s.db.QueryContext(ctx, base+invalid+` ORDER BY created_at DESC LIMIT ?`, limit*4)
 	} else {
-		rows, err = s.db.QueryContext(ctx, base+` WHERE status=? ORDER BY created_at DESC LIMIT ?`, status, limit)
+		rows, err = s.db.QueryContext(ctx, base+invalid+` AND status=? ORDER BY created_at DESC LIMIT ?`, status, limit*4)
 	}
 	if err != nil {
 		return nil, err
@@ -843,14 +881,56 @@ func (s *Store) ListHermesLearningAssets(ctx context.Context, status model.Herme
 	defer rows.Close()
 
 	var result []*model.HermesLearningAsset
+	seen := map[string]struct{}{}
 	for rows.Next() {
 		a, err := scanHermesLearningAsset(rows)
 		if err != nil {
 			return nil, err
 		}
+		key := string(a.AssetType) + ":" + a.ContentHash
+		if a.ContentHash == "" {
+			key = string(a.AssetType) + ":" + a.Path
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		hydrateHermesLearningContent(a)
 		result = append(result, a)
+		if len(result) >= limit {
+			break
+		}
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) UpdateHermesLearningAssetReview(ctx context.Context, id string, status model.HermesLearningStatus, reviewer, note string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE hermes_learning_assets
+		 SET status=?, reviewer=?, review_note=?, updated_at=?
+		 WHERE id=?`,
+		status, reviewer, note, time.Now(), id)
+	return err
+}
+
+func (s *Store) UpdateHermesLearningAssetReviewWithHash(ctx context.Context, id string, status model.HermesLearningStatus, contentHash, reviewer, note string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE hermes_learning_assets
+		 SET status=?, content_hash=?, reviewer=?, review_note=?, updated_at=?
+		 WHERE id=?`,
+		status, contentHash, reviewer, note, time.Now(), id)
+	return err
+}
+
+func hydrateHermesLearningContent(a *model.HermesLearningAsset) {
+	if a == nil || a.Path == "" || a.ChangeType == model.HermesLearningChangeDeleted {
+		return
+	}
+	data, err := os.ReadFile(a.Path)
+	if err != nil {
+		return
+	}
+	a.Content = string(data)
 }
 
 func scanHermesLearningAsset(r rowScanner) (*model.HermesLearningAsset, error) {

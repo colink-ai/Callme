@@ -4,7 +4,7 @@ import type {
   AgentSettings,
   CandidateAsset,
   CandidateAssetStatus,
-  CandidateAssetType,
+  KnowledgePublishTarget,
   DailyPoint,
   HotQuestion,
   HermesLearningAsset,
@@ -23,6 +23,15 @@ import type {
 } from '../types';
 
 const http = axios.create({ baseURL: '/api/v1', timeout: 30000 });
+
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const token = localStorage.getItem('callme_auth_token');
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const activeRole = localStorage.getItem('callme_active_role');
+  if (activeRole) headers['X-Callme-Active-Role'] = activeRole;
+  return headers;
+}
 
 http.interceptors.request.use((config) => {
   const token = localStorage.getItem('callme_auth_token');
@@ -114,17 +123,108 @@ export const api = {
       .post<CandidateAsset>(`/learning/candidates/${id}/review`, { approve, note })
       .then((r) => r.data),
   createManualKnowledgeDraft: (payload: {
-    assetType: CandidateAssetType;
+    publishTargets: KnowledgePublishTarget[];
     description: string;
     images?: { base64: string; data?: string; mimeType: string; filename?: string; width?: number; height?: number }[];
   }) =>
     http.post<CandidateAsset>('/learning/manual-drafts', payload, { timeout: 90000 }).then((r) => r.data),
+  streamManualKnowledgeDraft: async (
+    payload: {
+      publishTargets: KnowledgePublishTarget[];
+      description: string;
+      images?: { base64: string; data?: string; mimeType: string; filename?: string; width?: number; height?: number }[];
+    },
+    onEvent: (event: { type: string; delta?: string; content?: string; candidate?: CandidateAsset; error?: string }) => void,
+  ) => {
+    const resp = await fetch('/api/v1/learning/manual-drafts/stream', {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok || !resp.body) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(text || `HTTP ${resp.status}`);
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split('\n\n');
+      buffer = frames.pop() ?? '';
+      for (const frame of frames) {
+        const line = frame.split('\n').find((item) => item.startsWith('data:'));
+        if (!line) continue;
+        const raw = line.slice(5).trim();
+        if (!raw) continue;
+        const event = JSON.parse(raw) as { type: string; delta?: string; content?: string; candidate?: CandidateAsset; error?: string };
+        onEvent(event);
+        if (event.type === 'error') throw new Error(event.error || '生成候选知识失败');
+      }
+    }
+  },
   listHermesLearningAssets: (status?: HermesLearningStatus) =>
     http
       .get<{ assets: HermesLearningAsset[] | null }>('/learning/hermes-assets', {
         params: status ? { status } : {},
       })
       .then((r) => r.data.assets ?? []),
+  reviewHermesLearningAsset: (
+    id: string,
+    action: 'keep' | 'delete' | 'modify',
+    note?: string,
+    content?: string,
+  ) =>
+    http.post<HermesLearningAsset>(`/learning/hermes-assets/${id}/review`, { action, note, content }).then((r) => r.data),
+  assistHermesLearningEdit: (id: string, instruction: string, content: string) =>
+    http
+      .post<{ content: string }>(`/learning/hermes-assets/${id}/assist-edit`, { instruction, content }, { timeout: 90000 })
+      .then((r) => r.data.content),
+  streamHermesLearningEdit: async (
+    id: string,
+    instruction: string,
+    content: string,
+    onEvent: (event: { type: string; delta?: string; content?: string; error?: string }) => void,
+  ) => {
+    const resp = await fetch(`/api/v1/learning/hermes-assets/${id}/assist-edit/stream`, {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify({ instruction, content }),
+    });
+    if (!resp.ok || !resp.body) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(text || `HTTP ${resp.status}`);
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split('\n\n');
+      buffer = frames.pop() ?? '';
+      for (const frame of frames) {
+        const line = frame.split('\n').find((item) => item.startsWith('data:'));
+        if (!line) continue;
+        const raw = line.slice(5).trim();
+        if (!raw) continue;
+        const event = JSON.parse(raw) as { type: string; delta?: string; content?: string; error?: string };
+        onEvent(event);
+        if (event.type === 'error') throw new Error(event.error || 'AI 修订失败');
+      }
+    }
+  },
   listLearningJobs: () =>
     http.get<{ jobs: LearningJob[] | null }>('/learning/jobs').then((r) => r.data.jobs ?? []),
   runLearningJob: () => http.post('/learning/jobs/run'),

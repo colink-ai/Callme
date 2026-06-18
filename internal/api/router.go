@@ -54,7 +54,7 @@ func NewRouter(d *Deps) *gin.Engine {
 		v1.GET("/auth/me", d.authRequired(), d.me)
 
 		protected := v1.Group("")
-		protected.Use(d.authRequired())
+		protected.Use(d.authRequired(), d.activeRoleRequired())
 		// 会话
 		protected.POST("/sessions", d.createSession)
 		protected.GET("/sessions/current", d.currentSession)
@@ -69,15 +69,15 @@ func NewRouter(d *Deps) *gin.Engine {
 
 		// 反馈（自学习闭环入口）
 		protected.POST("/feedback", d.submitFeedback)
-		protected.GET("/learning/notes", d.knowledgeRequired(), d.getLearningNotes)
-		// 自学习沙箱：候选资产审批（管理员 / 知识专家）
-		protected.GET("/learning/candidates", d.knowledgeRequired(), d.listCandidates)
-		protected.GET("/learning/hermes-assets", d.knowledgeRequired(), d.listHermesLearningAssets)
-		protected.GET("/learning/jobs", d.knowledgeRequired(), d.listLearningJobs)
-		protected.POST("/learning/jobs/run", d.knowledgeRequired(), d.runLearningJob)
-		protected.POST("/learning/manual-drafts", d.knowledgeRequired(), d.createManualKnowledgeDraft)
-		protected.PUT("/learning/candidates/:id", d.knowledgeRequired(), d.updateCandidate)
-		protected.POST("/learning/candidates/:id/review", d.knowledgeRequired(), d.reviewCandidate)
+		protected.GET("/learning/notes", d.knowledgeContributorRequired(), d.getLearningNotes)
+		// 知识沉淀：知识专员可录入/编辑候选；知识专家/管理员负责审批与审计。
+		protected.GET("/learning/candidates", d.knowledgeContributorRequired(), d.listCandidates)
+		protected.POST("/learning/manual-drafts", d.knowledgeContributorRequired(), d.createManualKnowledgeDraft)
+		protected.PUT("/learning/candidates/:id", d.knowledgeContributorRequired(), d.updateCandidate)
+		protected.GET("/learning/hermes-assets", d.knowledgeReviewerRequired(), d.listHermesLearningAssets)
+		protected.GET("/learning/jobs", d.knowledgeReviewerRequired(), d.listLearningJobs)
+		protected.POST("/learning/jobs/run", d.knowledgeReviewerRequired(), d.runLearningJob)
+		protected.POST("/learning/candidates/:id/review", d.knowledgeReviewerRequired(), d.reviewCandidate)
 
 		// 转人工/工单
 		protected.POST("/sessions/:id/handoff", d.createHandoff)
@@ -130,7 +130,7 @@ func (d *Deps) authRequired() gin.HandlerFunc {
 
 func (d *Deps) adminRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !currentUser(c).HasRole(model.UserRoleAdmin) {
+		if currentRole(c) != model.UserRoleAdmin {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "仅管理员可访问"})
 			return
 		}
@@ -138,13 +138,39 @@ func (d *Deps) adminRequired() gin.HandlerFunc {
 	}
 }
 
-func (d *Deps) knowledgeRequired() gin.HandlerFunc {
+func (d *Deps) knowledgeContributorRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		user := currentUser(c)
-		if !user.HasRole(model.UserRoleAdmin) && !user.HasRole(model.UserRoleKnowledgeExpert) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "仅管理员或知识专家可访问"})
+		switch currentRole(c) {
+		case model.UserRoleAdmin, model.UserRoleKnowledgeExpert, model.UserRoleKnowledgeStaff:
+			c.Next()
+		default:
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "仅知识专员、知识专家或管理员可访问"})
+		}
+	}
+}
+
+func (d *Deps) knowledgeReviewerRequired() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		switch currentRole(c) {
+		case model.UserRoleAdmin, model.UserRoleKnowledgeExpert:
+			c.Next()
+		default:
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "仅知识专家或管理员可审批"})
+		}
+	}
+}
+
+func (d *Deps) activeRoleRequired() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role := model.UserRole(strings.TrimSpace(c.GetHeader("X-Callme-Active-Role")))
+		if role == "" {
+			role = currentUser(c).Role
+		}
+		if !model.IsValidUserRole(role) || !currentUser(c).HasRole(role) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前账号不具备该角色"})
 			return
 		}
+		c.Set("activeRole", role)
 		c.Next()
 	}
 }
@@ -161,6 +187,18 @@ func currentUser(c *gin.Context) *model.User {
 	u, _ := c.Get("user")
 	user, _ := u.(*model.User)
 	return user
+}
+
+func currentRole(c *gin.Context) model.UserRole {
+	role, _ := c.Get("activeRole")
+	if r, ok := role.(model.UserRole); ok && r != "" {
+		return r
+	}
+	user := currentUser(c)
+	if user == nil {
+		return ""
+	}
+	return user.Role
 }
 
 func (d *Deps) requireSessionAccess(c *gin.Context, sessionID string) (*model.Session, bool) {

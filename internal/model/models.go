@@ -3,12 +3,13 @@ package model
 
 import "time"
 
-// UserRole 用户角色：普通用户 / VIP / 知识专家 / 管理员
+// UserRole 用户角色：普通用户 / VIP / 知识专员 / 知识专家 / 管理员
 type UserRole string
 
 const (
 	UserRoleNormal          UserRole = "normal"
 	UserRoleVIP             UserRole = "vip"
+	UserRoleKnowledgeStaff  UserRole = "knowledge_staff"
 	UserRoleKnowledgeExpert UserRole = "knowledge_expert"
 	UserRoleAdmin           UserRole = "admin"
 )
@@ -64,7 +65,7 @@ func NormalizeRoles(roles []UserRole) []UserRole {
 // PrimaryRole 返回用于兼容旧 role 字段的主角色。
 func PrimaryRole(roles []UserRole) UserRole {
 	roles = NormalizeRoles(roles)
-	for _, preferred := range []UserRole{UserRoleAdmin, UserRoleKnowledgeExpert, UserRoleVIP, UserRoleNormal} {
+	for _, preferred := range []UserRole{UserRoleAdmin, UserRoleKnowledgeExpert, UserRoleKnowledgeStaff, UserRoleVIP, UserRoleNormal} {
 		for _, role := range roles {
 			if role == preferred {
 				return role
@@ -77,6 +78,7 @@ func PrimaryRole(roles []UserRole) UserRole {
 func IsValidUserRole(role UserRole) bool {
 	return role == UserRoleNormal ||
 		role == UserRoleVIP ||
+		role == UserRoleKnowledgeStaff ||
 		role == UserRoleKnowledgeExpert ||
 		role == UserRoleAdmin
 }

@@ -11,6 +11,7 @@ const { Title } = Typography;
 const roleLabels: Record<UserRole, string> = {
   normal: '普通用户',
   vip: 'VIP 用户',
+  knowledge_staff: '知识专员',
   knowledge_expert: '知识专家',
   admin: '管理员',
 };
@@ -18,6 +19,7 @@ const roleLabels: Record<UserRole, string> = {
 const roleColors: Record<UserRole, string> = {
   normal: 'default',
   vip: 'gold',
+  knowledge_staff: 'blue',
   knowledge_expert: 'cyan',
   admin: 'red',
 };
@@ -93,6 +95,7 @@ export default function UsersPage() {
                   options={[
                     { label: '普通用户', value: 'normal' },
                     { label: 'VIP 用户', value: 'vip' },
+                    { label: '知识专员', value: 'knowledge_staff' },
                     { label: '知识专家', value: 'knowledge_expert' },
                     { label: '管理员', value: 'admin' },
                   ]}

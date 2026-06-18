@@ -49,8 +49,17 @@ const knowledgeMenuItems = [
 const roleLabels = {
   normal: '普通用户',
   vip: 'VIP',
+  knowledge_staff: '知识专员',
   knowledge_expert: '知识专家',
   admin: '管理员',
+} as const;
+
+const roleColors = {
+  normal: 'default',
+  vip: 'gold',
+  knowledge_staff: 'blue',
+  knowledge_expert: 'cyan',
+  admin: 'red',
 } as const;
 
 // 主题切换器（参考 ReviewBuddy：只有图标，没有文字）
@@ -77,15 +86,16 @@ function ThemeSwitcher() {
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { token, user, version, restoring, restore, logout } = useAuthStore();
+  const { token, user, activeRole, version, restoring, restore, logout, setActiveRole } = useAuthStore();
   const resetChat = useChatStore((s) => s.reset);
   const roles = user?.roles?.length ? user.roles : user ? [user.role] : [];
-  const hasRole = (role: string) => roles.includes(role as typeof roles[number]);
-  const canManageKnowledge = hasRole('admin') || hasRole('knowledge_expert');
+  const usingRole = activeRole && roles.includes(activeRole as typeof roles[number]) ? activeRole : user?.role;
+  const hasActiveRole = (role: string) => usingRole === role;
+  const canManageKnowledge = hasActiveRole('admin') || hasActiveRole('knowledge_expert') || hasActiveRole('knowledge_staff');
   const allItems = [
     ...menuItems,
     ...(canManageKnowledge ? knowledgeMenuItems : []),
-    ...(hasRole('admin') ? adminMenuItems : []),
+    ...(hasActiveRole('admin') ? adminMenuItems : []),
   ];
   const selected = allItems.find((m) => location.pathname.startsWith(m.key))?.key ?? '/chat';
 
@@ -103,14 +113,17 @@ export default function App() {
 
   if (!token || !user) return <AuthPage />;
 
-  const roleLabel = roles.map((role) => roleLabels[role] ?? role).join(' / ');
-  const roleColor = hasRole('admin')
-    ? 'red'
-    : hasRole('knowledge_expert')
-      ? 'cyan'
-      : hasRole('vip')
-        ? 'gold'
-        : 'default';
+  const roleLabel = roleLabels[usingRole as keyof typeof roleLabels] ?? usingRole ?? '普通用户';
+  const roleColor = roleColors[usingRole as keyof typeof roleColors] ?? 'default';
+  const switchRole = (role: string) => {
+    setActiveRole(role);
+    const nextIsAdmin = role === 'admin';
+    const nextCanManageKnowledge = nextIsAdmin || role === 'knowledge_expert' || role === 'knowledge_staff';
+    const onAdminOnlyPage = ['/dashboard', '/monitor', '/tickets', '/users', '/settings'].some((path) => location.pathname.startsWith(path));
+    if ((onAdminOnlyPage && !nextIsAdmin) || (location.pathname.startsWith('/curation') && !nextCanManageKnowledge)) {
+      navigate('/chat');
+    }
+  };
 
   return (
     <Layout style={{ height: '100%' }}>
@@ -130,7 +143,19 @@ export default function App() {
           <Dropdown
             menu={{
               items: [
-                { key: 'role', label: <Text type="secondary">{roleLabel}</Text>, disabled: true },
+                { key: 'role-title', label: <Text type="secondary">当前角色</Text>, disabled: true },
+                ...roles.map((role) => ({
+                  key: `role-${role}`,
+                  label: (
+                    <Space>
+                      <Tag color={roleColors[role as keyof typeof roleColors] ?? 'default'} style={{ margin: 0 }}>
+                        {roleLabels[role as keyof typeof roleLabels] ?? role}
+                      </Tag>
+                      {role === usingRole && <CheckOutlined />}
+                    </Space>
+                  ),
+                  onClick: () => switchRole(role),
+                })),
                 { type: 'divider' },
                 {
                   key: 'logout',
@@ -157,7 +182,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/chat" replace />} />
           <Route path="/chat" element={<ChatPage />} />
           {canManageKnowledge && <Route path="/curation" element={<CurationPage />} />}
-          {hasRole('admin') && (
+          {hasActiveRole('admin') && (
             <>
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/monitor" element={<MonitorPage />} />

@@ -22,6 +22,7 @@ import {
 import { CheckOutlined, CloseOutlined, EditOutlined, PictureOutlined, ReloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api, apiErrorMessage } from '../../api/client';
+import { useAuthStore } from '../../store/authStore';
 import type {
   CandidateAsset,
   CandidateAssetStatus,
@@ -69,6 +70,10 @@ function parseEvidence(raw?: string): Record<string, unknown> | null {
 }
 
 export default function CurationPage() {
+  const { user, activeRole } = useAuthStore();
+  const roles = user?.roles?.length ? user.roles : user ? [user.role] : [];
+  const usingRole = activeRole && roles.includes(activeRole as typeof roles[number]) ? activeRole : user?.role;
+  const canReview = usingRole === 'admin' || usingRole === 'knowledge_expert';
   const [track, setTrack] = useState<'manual' | 'knowledge' | 'hermes' | 'jobs' | 'approved'>('manual');
   const [status, setStatus] = useState<CandidateAssetStatus>('pending');
   const [hermesStatus, setHermesStatus] = useState<HermesLearningStatus>('pending_review');
@@ -108,8 +113,12 @@ export default function CurationPage() {
   }, [track, status, hermesStatus]);
 
   useEffect(() => {
+    if (!canReview && (track === 'hermes' || track === 'jobs')) {
+      setTrack('manual');
+      return;
+    }
     load();
-  }, [load]);
+  }, [canReview, load, track]);
 
   const approve = async (c: CandidateAsset) => {
     try {
@@ -245,12 +254,13 @@ export default function CurationPage() {
       <Space style={{ marginBottom: 8, width: '100%', justifyContent: 'space-between' }}>
         <Title level={4} style={{ margin: 0 }}>知识沉淀 · 审批</Title>
         <Space>
-          <Button onClick={runLearningJob} loading={loading}>立即 AI 学习</Button>
+          {canReview && <Button onClick={runLearningJob} loading={loading}>立即 AI 学习</Button>}
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
         </Space>
       </Space>
       <Paragraph type="secondary" style={{ fontSize: 13 }}>
-        双轨学习机制：客服知识走候选审批，Hermes 自学习走审计纠偏。<Text strong>业务事实必须审批后才可作为正式依据</Text>。
+        {canReview ? '双轨学习机制：客服知识走候选审批，Hermes 自学习走审计纠偏。' : '知识专员可录入并维护候选知识，提交后由知识专家或管理员审批。'}
+        <Text strong>业务事实必须审批后才可作为正式依据</Text>。
       </Paragraph>
 
       <Segmented
@@ -260,8 +270,10 @@ export default function CurationPage() {
         options={[
           { label: '人工录入', value: 'manual' },
           { label: '客服知识审批', value: 'knowledge' },
-          { label: 'Hermes 自学习审计', value: 'hermes' },
-          { label: 'AI 执行历史', value: 'jobs' },
+          ...(canReview ? [
+            { label: 'Hermes 自学习审计', value: 'hermes' },
+            { label: 'AI 执行历史', value: 'jobs' },
+          ] : []),
           { label: '正式知识', value: 'approved' },
         ]}
       />
@@ -418,12 +430,16 @@ export default function CurationPage() {
                         <Tooltip title="编辑后再审批">
                           <Button size="small" icon={<EditOutlined />} onClick={() => setEditing({ ...row })} />
                         </Tooltip>
-                        <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => approve(row)}>
-                          通过
-                        </Button>
-                        <Button size="small" danger icon={<CloseOutlined />} onClick={() => setRejecting(row)}>
-                          拒绝
-                        </Button>
+                        {canReview && (
+                          <>
+                            <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => approve(row)}>
+                              通过
+                            </Button>
+                            <Button size="small" danger icon={<CloseOutlined />} onClick={() => setRejecting(row)}>
+                              拒绝
+                            </Button>
+                          </>
+                        )}
                       </>
                     )}
                   </Space>

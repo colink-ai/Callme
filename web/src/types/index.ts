@@ -1,7 +1,7 @@
 // 与后端 internal/model、internal/service/session 对齐的类型定义
 
 export type SessionStatus = 'queued' | 'active' | 'closed';
-export type UserRole = 'normal' | 'vip' | 'knowledge_expert' | 'admin';
+export type UserRole = 'normal' | 'vip' | 'knowledge_staff' | 'knowledge_expert' | 'admin';
 
 export interface User {
   id: string;

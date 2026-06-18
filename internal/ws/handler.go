@@ -41,7 +41,7 @@ func NewHandler(manager *session.Manager, authSvc *auth.Service, store *repo.Sto
 
 // clientMessage 客户端上行消息
 type clientMessage struct {
-	Type    string               `json:"type"` // user_message | ping | close
+	Type    string               `json:"type"` // user_message | ping | close | stop
 	Content string               `json:"content,omitempty"`
 	Images  []model.ImageContent `json:"images,omitempty"`
 }
@@ -117,6 +117,10 @@ func (h *Handler) HandleWebSocket(c *gin.Context) {
 			}(msg.Content, msg.Images)
 		case "ping":
 			h.manager.Touch(sessionID)
+		case "stop":
+			if err := h.manager.StopCurrentTurn(sessionID); err != nil {
+				send(session.Event{Type: session.EventError, SessionID: sessionID, Error: err.Error()})
+			}
 		case "close":
 			h.manager.CloseSession(context.Background(), sessionID, model.CloseReasonUser)
 			return

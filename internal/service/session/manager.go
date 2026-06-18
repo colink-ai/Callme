@@ -37,6 +37,15 @@ var (
 	ErrSessionQueued = errors.New("会话排队中，请等待接入")
 )
 
+type UserConcurrencyError struct {
+	MaxSessions     int
+	CurrentSessions int
+}
+
+func (e *UserConcurrencyError) Error() string {
+	return fmt.Sprintf("由于算力资源有限，当前账号最多允许 %d 个并发会话。您已有 %d 个进行中的会话，请结束已有会话后再新建。", e.MaxSessions, e.CurrentSessions)
+}
+
 // EventType 推送给前端的事件类型
 type EventType string
 
@@ -88,6 +97,7 @@ type live struct {
 	subscriber   Subscriber
 	lastActivity time.Time
 	busy         bool // 一轮 Prompt 进行中
+	cancelPrompt context.CancelFunc
 	turnCount    int
 	mu           sync.Mutex
 }
@@ -183,9 +193,10 @@ func (m *Manager) ContinueSession(ctx context.Context, user *model.User, source 
 			userCount++
 		}
 	}
-	if userCount >= m.cfg.MaxPerClient {
+	maxSessions := user.MaxConcurrentSessions()
+	if userCount >= maxSessions {
 		m.mu.Unlock()
-		return nil, ErrClientBusy
+		return nil, &UserConcurrencyError{MaxSessions: maxSessions, CurrentSessions: userCount}
 	}
 	isVIP := user.HasRole(model.UserRoleVIP)
 	if !isVIP && len(m.queue) >= pool.MaxQueue {
@@ -252,9 +263,10 @@ func (m *Manager) createSession(ctx context.Context, user *model.User, title str
 			userCount++
 		}
 	}
-	if userCount >= m.cfg.MaxPerClient {
+	maxSessions := user.MaxConcurrentSessions()
+	if userCount >= maxSessions {
 		m.mu.Unlock()
-		return nil, ErrClientBusy
+		return nil, &UserConcurrencyError{MaxSessions: maxSessions, CurrentSessions: userCount}
 	}
 	isVIP := user.HasRole(model.UserRoleVIP)
 	if !isVIP && len(m.queue) >= pool.MaxQueue {
@@ -384,7 +396,9 @@ func (m *Manager) HandleUserMessage(ctx context.Context, sessionID, content stri
 		l.mu.Unlock()
 		return ErrSessionBusy
 	}
+	turnCtx, cancel := context.WithCancel(ctx)
 	l.busy = true
+	l.cancelPrompt = cancel
 	l.turnCount++
 	turn := l.turnCount
 	adapter := l.adapter
@@ -392,8 +406,10 @@ func (m *Manager) HandleUserMessage(ctx context.Context, sessionID, content stri
 	l.mu.Unlock()
 
 	defer func() {
+		cancel()
 		l.mu.Lock()
 		l.busy = false
+		l.cancelPrompt = nil
 		l.lastActivity = time.Now()
 		l.mu.Unlock()
 	}()
@@ -447,7 +463,7 @@ func (m *Manager) HandleUserMessage(ctx context.Context, sessionID, content stri
 	// 调用 Agent，流式回调推送 + 累积助手回答与工具调用（知识引用）
 	var answer strings.Builder
 	var toolCalls []map[string]any
-	err := adapter.Prompt(ctx, sessionID, input, agentImages, func(chunk agent.Chunk) {
+	err := adapter.Prompt(turnCtx, sessionID, input, agentImages, func(chunk agent.Chunk) {
 		switch chunk.Type {
 		case agent.ChunkTypeText:
 			answer.WriteString(chunk.Content)
@@ -462,6 +478,14 @@ func (m *Manager) HandleUserMessage(ctx context.Context, sessionID, content stri
 	})
 
 	if err != nil {
+		if errors.Is(turnCtx.Err(), context.Canceled) {
+			m.logger.Info("agent prompt stopped by user", zap.String("sessionID", sessionID))
+			if answer.Len() > 0 {
+				m.persistAssistantMessage(context.Background(), sessionID, spec, answer.String()+"\n\n（已停止生成）", toolCalls)
+			}
+			m.notify(l, Event{Type: EventChunk, SessionID: sessionID, Chunk: &agent.Chunk{Type: agent.ChunkTypeDone}})
+			return nil
+		}
 		if m.isPromptInterruptedByClose(sessionID, l, err) {
 			m.logger.Info("agent prompt interrupted by session close", zap.String("sessionID", sessionID), zap.Error(err))
 			return nil
@@ -471,7 +495,15 @@ func (m *Manager) HandleUserMessage(ctx context.Context, sessionID, content stri
 		return err
 	}
 
-	// 助手消息落库（带知识检索调用记录，用于引用展示与命中率统计）
+	assistantMsg := m.persistAssistantMessage(ctx, sessionID, spec, answer.String(), toolCalls)
+	m.notify(l, Event{Type: EventChunk, SessionID: sessionID, Chunk: &agent.Chunk{Type: agent.ChunkTypeDone}})
+	if assistantMsg != nil {
+		m.notify(l, Event{Type: EventMessage, SessionID: sessionID, Message: assistantMsg})
+	}
+	return nil
+}
+
+func (m *Manager) persistAssistantMessage(ctx context.Context, sessionID string, spec agent.AgentSpec, content string, toolCalls []map[string]any) *model.Message {
 	toolCallsJSON := ""
 	if len(toolCalls) > 0 {
 		if data, err := json.Marshal(toolCalls); err == nil {
@@ -482,7 +514,7 @@ func (m *Manager) HandleUserMessage(ctx context.Context, sessionID, content stri
 		ID:        uuid.New().String(),
 		SessionID: sessionID,
 		Role:      model.MessageRoleAssistant,
-		Content:   answer.String(),
+		Content:   content,
 		ToolCalls: toolCallsJSON,
 		Model:     spec.DefaultModel,
 		AgentType: spec.Type,
@@ -490,10 +522,9 @@ func (m *Manager) HandleUserMessage(ctx context.Context, sessionID, content stri
 	}
 	if err := m.store.CreateMessage(ctx, assistantMsg); err != nil {
 		m.logger.Error("persist assistant message failed", zap.Error(err))
+		return nil
 	}
-	m.notify(l, Event{Type: EventChunk, SessionID: sessionID, Chunk: &agent.Chunk{Type: agent.ChunkTypeDone}})
-	m.notify(l, Event{Type: EventMessage, SessionID: sessionID, Message: assistantMsg})
-	return nil
+	return assistantMsg
 }
 
 func validateImages(images []model.ImageContent) error {
@@ -538,6 +569,26 @@ func (m *Manager) isPromptInterruptedByClose(sessionID string, l *live, err erro
 		return strings.Contains(text, "context canceled") || strings.Contains(text, "aborted")
 	}
 	return false
+}
+
+// StopCurrentTurn 只停止当前一轮回答，不关闭会话。
+func (m *Manager) StopCurrentTurn(sessionID string) error {
+	m.mu.Lock()
+	l, ok := m.active[sessionID]
+	m.mu.Unlock()
+	if !ok {
+		return ErrSessionGone
+	}
+	l.mu.Lock()
+	cancel := l.cancelPrompt
+	busy := l.busy
+	l.mu.Unlock()
+	if !busy || cancel == nil {
+		return nil
+	}
+	cancel()
+	m.notify(l, Event{Type: EventChunk, SessionID: sessionID, Chunk: &agent.Chunk{Type: agent.ChunkTypeDone}})
+	return nil
 }
 
 // CloseSession 结束会话并释放坐席，按序放行队首

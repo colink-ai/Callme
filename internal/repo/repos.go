@@ -252,13 +252,16 @@ func scanSession(r rowScanner) (*model.Session, error) {
 func (s *Store) CreateUser(ctx context.Context, u *model.User) error {
 	u.Roles = model.NormalizeRoles(append(u.Roles, u.Role))
 	u.Role = model.PrimaryRole(u.Roles)
+	if u.MaxSessions <= 0 {
+		u.MaxSessions = model.DefaultMaxSessionsForRoles(u.Roles)
+	}
 	rolesJSON, err := json.Marshal(u.Roles)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO users (id, username, password_hash, role, roles, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		u.ID, u.Username, u.PasswordHash, u.Role, string(rolesJSON), u.CreatedAt, u.UpdatedAt)
+		`INSERT INTO users (id, username, password_hash, role, roles, max_sessions, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.Username, u.PasswordHash, u.Role, string(rolesJSON), u.MaxSessions, u.CreatedAt, u.UpdatedAt)
 	return err
 }
 
@@ -266,8 +269,8 @@ func (s *Store) GetUser(ctx context.Context, id string) (*model.User, error) {
 	var u model.User
 	var roles string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, role, roles, created_at, updated_at FROM users WHERE id=?`, id).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &roles, &u.CreatedAt, &u.UpdatedAt)
+		`SELECT id, username, password_hash, role, roles, max_sessions, created_at, updated_at FROM users WHERE id=?`, id).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &roles, &u.MaxSessions, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -279,8 +282,8 @@ func (s *Store) GetUserByUsername(ctx context.Context, username string) (*model.
 	var u model.User
 	var roles string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, role, roles, created_at, updated_at FROM users WHERE username=?`, username).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &roles, &u.CreatedAt, &u.UpdatedAt)
+		`SELECT id, username, password_hash, role, roles, max_sessions, created_at, updated_at FROM users WHERE username=?`, username).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &roles, &u.MaxSessions, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +293,7 @@ func (s *Store) GetUserByUsername(ctx context.Context, username string) (*model.
 
 func (s *Store) ListUsers(ctx context.Context) ([]*model.User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, role, roles, created_at, updated_at FROM users ORDER BY created_at ASC`)
+		`SELECT id, username, password_hash, role, roles, max_sessions, created_at, updated_at FROM users ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +302,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]*model.User, error) {
 	for rows.Next() {
 		var u model.User
 		var roles string
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &roles, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &roles, &u.MaxSessions, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
 		u.Roles = decodeUserRoles(u.Role, roles)
@@ -345,13 +348,20 @@ func (s *Store) UpdateUserRole(ctx context.Context, id string, role model.UserRo
 }
 
 func (s *Store) UpdateUserRoles(ctx context.Context, id string, roles []model.UserRole) error {
+	return s.UpdateUserRolesAndLimit(ctx, id, roles, 0)
+}
+
+func (s *Store) UpdateUserRolesAndLimit(ctx context.Context, id string, roles []model.UserRole, maxSessions int) error {
 	roles = model.NormalizeRoles(roles)
 	primary := model.PrimaryRole(roles)
+	if maxSessions <= 0 {
+		maxSessions = model.DefaultMaxSessionsForRoles(roles)
+	}
 	rolesJSON, err := json.Marshal(roles)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE users SET role=?, roles=?, updated_at=? WHERE id=?`, primary, string(rolesJSON), time.Now(), id)
+	_, err = s.db.ExecContext(ctx, `UPDATE users SET role=?, roles=?, max_sessions=?, updated_at=? WHERE id=?`, primary, string(rolesJSON), maxSessions, time.Now(), id)
 	return err
 }
 

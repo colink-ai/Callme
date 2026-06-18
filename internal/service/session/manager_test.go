@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -152,8 +153,9 @@ func TestSeatLimitAndQueue(t *testing.T) {
 	}
 
 	// 同客户端再开会话：拒绝
-	if _, err := m.CreateSession(ctx, testUser("client-a", model.UserRoleNormal)); err != ErrClientBusy {
-		t.Fatalf("expect ErrClientBusy, got %v", err)
+	var limitErr *UserConcurrencyError
+	if _, err := m.CreateSession(ctx, testUser("client-a", model.UserRoleNormal)); !errors.As(err, &limitErr) || limitErr.MaxSessions != 1 {
+		t.Fatalf("expect UserConcurrencyError max=1, got %v", err)
 	}
 
 	// 排队会话发消息：拒绝

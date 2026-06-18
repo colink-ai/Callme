@@ -34,6 +34,7 @@ interface ChatState {
   startSession: () => Promise<void>;
   continueSession: (sessionId: string) => Promise<void>;
   sendMessage: (content: string, images?: ImageAttachment[]) => void;
+  stopGeneration: () => void;
   endSession: () => Promise<void>;
   requestHandoff: (reason: string) => Promise<string>;
   submitFeedback: (messageId: string, rating: 'up' | 'down', correction?: string) => Promise<void>;
@@ -202,6 +203,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
         width: img.width,
         height: img.height,
       })),
+    }));
+  },
+
+  stopGeneration: () => {
+    const { session, busy } = get();
+    if (!session || !socket || socket.readyState !== WebSocket.OPEN || !busy) return;
+    socket.send(JSON.stringify({ type: 'stop' }));
+    set((s) => ({
+      error: null,
+      busy: false,
+      thinking: false,
+      messages: finalizeStreamingMessages(s.messages, true),
     }));
   },
 

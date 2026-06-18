@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -228,9 +229,18 @@ func (d *Deps) me(c *gin.Context) {
 func (d *Deps) createSession(c *gin.Context) {
 	view, err := d.Sessions.CreateSession(c.Request.Context(), currentUser(c))
 	if err != nil {
+		var limitErr *session.UserConcurrencyError
+		if errors.As(err, &limitErr) {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error":           limitErr.Error(),
+				"code":            "user_concurrency_limit",
+				"maxSessions":     limitErr.MaxSessions,
+				"currentSessions": limitErr.CurrentSessions,
+			})
+			return
+		}
 		status := http.StatusInternalServerError
-		switch err {
-		case session.ErrQueueFull, session.ErrClientBusy:
+		if errors.Is(err, session.ErrQueueFull) || errors.Is(err, session.ErrClientBusy) {
 			status = http.StatusTooManyRequests
 		}
 		c.JSON(status, gin.H{"error": err.Error()})
@@ -320,9 +330,18 @@ func (d *Deps) continueSession(c *gin.Context) {
 	}
 	view, err := d.Sessions.ContinueSession(c.Request.Context(), currentUser(c), source)
 	if err != nil {
+		var limitErr *session.UserConcurrencyError
+		if errors.As(err, &limitErr) {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error":           limitErr.Error(),
+				"code":            "user_concurrency_limit",
+				"maxSessions":     limitErr.MaxSessions,
+				"currentSessions": limitErr.CurrentSessions,
+			})
+			return
+		}
 		status := http.StatusInternalServerError
-		switch err {
-		case session.ErrQueueFull, session.ErrClientBusy:
+		if errors.Is(err, session.ErrQueueFull) || errors.Is(err, session.ErrClientBusy) {
 			status = http.StatusTooManyRequests
 		}
 		c.JSON(status, gin.H{"error": err.Error()})
@@ -463,8 +482,9 @@ func (d *Deps) listUsers(c *gin.Context) {
 
 func (d *Deps) updateUserRole(c *gin.Context) {
 	var req struct {
-		Role  model.UserRole   `json:"role"`
-		Roles []model.UserRole `json:"roles"`
+		Role        model.UserRole   `json:"role"`
+		Roles       []model.UserRole `json:"roles"`
+		MaxSessions int              `json:"maxSessions"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -473,7 +493,7 @@ func (d *Deps) updateUserRole(c *gin.Context) {
 	if len(req.Roles) == 0 && req.Role != "" {
 		req.Roles = []model.UserRole{req.Role}
 	}
-	if err := d.Auth.UpdateRoles(c.Request.Context(), c.Param("id"), req.Roles); err != nil {
+	if err := d.Auth.UpdateRoles(c.Request.Context(), c.Param("id"), req.Roles, req.MaxSessions); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Popconfirm, Select, Space, Table, Tag, Typography, message } from 'antd';
+import { Button, InputNumber, Popconfirm, Select, Space, Table, Tag, Typography, message } from 'antd';
 import { DeleteOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api, apiErrorMessage } from '../../api/client';
@@ -38,9 +38,9 @@ export default function UsersPage() {
     load();
   }, []);
 
-  const updateRole = async (id: string, roles: UserRole[]) => {
+  const updateRole = async (id: string, roles: UserRole[], maxSessions?: number) => {
     try {
-      await api.updateUserRole(id, roles);
+      await api.updateUserRole(id, roles, maxSessions);
       message.success('角色已更新');
       await load();
     } catch (err) {
@@ -76,6 +76,12 @@ export default function UsersPage() {
           },
           { title: '注册时间', dataIndex: 'createdAt', render: (v) => dayjs(v).format('YYYY-MM-DD HH:mm') },
           {
+            title: '并发会话',
+            dataIndex: 'maxSessions',
+            width: 120,
+            render: (v: number) => `${v || 1} 个`,
+          },
+          {
             title: '操作',
             render: (_, record) => (
               <Space>
@@ -90,6 +96,14 @@ export default function UsersPage() {
                     { label: '知识专家', value: 'knowledge_expert' },
                     { label: '管理员', value: 'admin' },
                   ]}
+                />
+                <InputNumber
+                  min={1}
+                  max={50}
+                  value={record.maxSessions || 1}
+                  addonAfter="并发"
+                  style={{ width: 130 }}
+                  onChange={(value) => updateRole(record.id, record.roles?.length ? record.roles : [record.role], Number(value) || 1)}
                 />
                 <Popconfirm
                   title="确认删除该用户？"

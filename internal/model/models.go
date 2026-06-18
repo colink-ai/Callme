@@ -20,6 +20,7 @@ type User struct {
 	PasswordHash string     `json:"-"`
 	Role         UserRole   `json:"role"`  // 兼容旧前端/旧接口的主角色
 	Roles        []UserRole `json:"roles"` // 新权限模型：一个用户可拥有多个角色
+	MaxSessions  int        `json:"maxSessions"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	UpdatedAt    time.Time  `json:"updatedAt"`
 }
@@ -78,6 +79,35 @@ func IsValidUserRole(role UserRole) bool {
 		role == UserRoleVIP ||
 		role == UserRoleKnowledgeExpert ||
 		role == UserRoleAdmin
+}
+
+// DefaultMaxSessionsForRoles 返回角色默认个人并发上限。
+func DefaultMaxSessionsForRoles(roles []UserRole) int {
+	roles = NormalizeRoles(roles)
+	max := 1
+	for _, role := range roles {
+		switch role {
+		case UserRoleAdmin:
+			if max < 10 {
+				max = 10
+			}
+		case UserRoleVIP:
+			if max < 2 {
+				max = 2
+			}
+		}
+	}
+	return max
+}
+
+func (u *User) MaxConcurrentSessions() int {
+	if u == nil {
+		return 1
+	}
+	if u.MaxSessions > 0 {
+		return u.MaxSessions
+	}
+	return DefaultMaxSessionsForRoles(append(u.Roles, u.Role))
 }
 
 // AuthToken 服务端登录态

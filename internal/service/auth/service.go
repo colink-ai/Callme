@@ -122,10 +122,10 @@ func (s *Service) ListUsers(ctx context.Context) ([]*model.User, error) {
 }
 
 func (s *Service) UpdateRole(ctx context.Context, id string, role model.UserRole) error {
-	return s.UpdateRoles(ctx, id, []model.UserRole{role})
+	return s.UpdateRoles(ctx, id, []model.UserRole{role}, 0)
 }
 
-func (s *Service) UpdateRoles(ctx context.Context, id string, roles []model.UserRole) error {
+func (s *Service) UpdateRoles(ctx context.Context, id string, roles []model.UserRole, maxSessions int) error {
 	for _, role := range roles {
 		if !model.IsValidUserRole(role) {
 			return errors.New("角色无效")
@@ -147,7 +147,13 @@ func (s *Service) UpdateRoles(ctx context.Context, id string, roles []model.User
 			}
 		}
 	}
-	return s.store.UpdateUserRoles(ctx, id, roles)
+	if maxSessions <= 0 {
+		maxSessions = model.DefaultMaxSessionsForRoles(roles)
+	}
+	if maxSessions > 50 {
+		return errors.New("个人并发上限不能超过 50")
+	}
+	return s.store.UpdateUserRolesAndLimit(ctx, id, roles, maxSessions)
 }
 
 func containsRole(roles []model.UserRole, target model.UserRole) bool {

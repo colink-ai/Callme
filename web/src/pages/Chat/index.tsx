@@ -472,6 +472,7 @@ export default function ChatPage() {
     startSession,
     continueSession,
     sendMessage,
+    stopGeneration,
     endSession,
     requestHandoff,
   } = useChatStore();
@@ -766,7 +767,7 @@ export default function ChatPage() {
 
             {/* 消息区 */}
             <div ref={listRef} className="chat-messages" onScroll={onMessagesScroll}>
-              {!session && (
+              {!session && messages.length === 0 && (
                 <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
                   <LogoIcon size={72} />
                   <Title level={3} style={{ margin: 0 }}>您好，我是 Callme 智能问题解决助手</Title>
@@ -856,7 +857,7 @@ export default function ChatPage() {
                 <div style={{ display: 'flex', gap: 8 }}>
                   <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
                     <Input.TextArea
-                      autoSize={{ minRows: 1, maxRows: 4 }}
+                      autoSize={{ minRows: 3, maxRows: 8 }}
                       placeholder={busy ? '回答生成中…' : '输入您的问题，Enter 发送，Shift+Enter 换行，支持粘贴/拖拽图片'}
                       value={input}
                       disabled={busy}
@@ -892,8 +893,8 @@ export default function ChatPage() {
                     发送
                   </Button>
                   {busy && (
-                    <Button danger icon={<StopOutlined />} onClick={endSession}>
-                      停止
+                    <Button danger icon={<StopOutlined />} onClick={stopGeneration}>
+                      停止生成
                     </Button>
                   )}
                 </div>

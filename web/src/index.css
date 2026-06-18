@@ -236,7 +236,7 @@ body,
 }
 
 .chat-input-wrap {
-  padding-top: 8px;
+  padding: 12px 0 4px;
 }
 
 .image-preview-strip {
@@ -278,11 +278,12 @@ body,
 .image-upload-button {
   position: absolute;
   right: 8px;
-  bottom: 5px;
+  bottom: 8px;
 }
 
 .chat-input-wrap textarea.ant-input {
-  padding-right: 42px;
+  padding: 12px 46px 12px 14px;
+  line-height: 1.65;
 }
 
 .message-image-grid {

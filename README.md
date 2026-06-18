@@ -46,32 +46,6 @@ Callme 的目标是成为企业内部的“智能问题解决层”：
 
 > 图片输入依赖底层 Agent 与模型的多模态能力。如果 Agent 的 ACP 实现暂不接受 image content block，会返回协议参数错误；此时需要切换支持图片的 Agent/模型，或在适配器中增加对应 Agent 的图片传输格式。
 
-## 界面预览
-
-### 智能问答
-
-面向研发与平台问题的一站式问答入口，支持历史会话、Agent 回答、图片输入、停止生成、继续追问和转人工。
-
-<img src="docs/screenshots/chat.png" alt="Callme 智能问答界面">
-
-### 知识沉淀
-
-支持人工录入、AI 生成候选知识、客服知识审批、Hermes 自学习审计和正式知识管理，让经验沉淀进入可控流程。
-
-<img src="docs/screenshots/curation.png" alt="Callme 知识沉淀界面">
-
-### 会话监控
-
-管理员可以查看活跃会话、排队队列和最近结束的会话，结合用户、时间范围、会话时长和结束原因定位资源占用与服务质量。
-
-<img src="docs/screenshots/monitor.png" alt="Callme 会话监控界面">
-
-### 用户与角色
-
-支持多角色用户、并发会话额度和角色切换，普通用户、VIP、知识专员、知识专家和管理员可以拥有不同功能边界。
-
-<img src="docs/screenshots/users.png" alt="Callme 用户管理界面">
-
 ## 技术架构
 
 <img src="docs/callme-architecture.png" alt="Callme 技术架构图">

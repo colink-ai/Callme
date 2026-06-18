@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"time"
 )
 
 // ImageContent 图片内容（用于多模态输入）
@@ -44,13 +45,14 @@ type Chunk struct {
 
 // AgentSpec Agent 运行配置（模型切换的载体：改这里 + 重启会话即可换模型）
 type AgentSpec struct {
-	Type         string // 插件类型：hermes
-	CliPath      string // CLI 路径
-	DefaultModel string // 模型 ID
-	APIURL       string // 自定义 provider base_url
-	APIToken     string // 自定义 provider token
-	HermesHome   string // 共享持久化配置/记忆目录（自学习）
-	SystemPrompt string // 客服系统提示词（注入首轮）
+	Type          string        // 插件类型：hermes
+	CliPath       string        // CLI 路径
+	DefaultModel  string        // 模型 ID
+	APIURL        string        // 自定义 provider base_url
+	APIToken      string        // 自定义 provider token
+	HermesHome    string        // 共享持久化配置/记忆目录（自学习）
+	SystemPrompt  string        // 客服系统提示词（注入首轮）
+	PromptTimeout time.Duration // 单轮回答最长等待时间；负数表示不主动超时
 }
 
 // MCPServerSpec 注入会话的 MCP server（知识图谱检索工具）

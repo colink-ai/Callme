@@ -12,6 +12,7 @@ database:
 agent:
   hermes_home: data/hermes-home # Hermes 持久化目录：配置、记忆、审批后的正式知识 approved_knowledge.md
   work_dir: data/workdir        # 会话工作目录根
+  prompt_timeout: 30m           # ACP 单轮回答最长等待时间；内网慢模型可调大，负数表示不主动超时
 
 auth:
   token_ttl: 168h

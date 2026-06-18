@@ -49,14 +49,15 @@ type DatabaseConfig struct {
 
 // AgentConfig Agent 基础路径配置。模型/API/提示词等运行时设置通过页面保存到数据库。
 type AgentConfig struct {
-	Type         string `yaml:"type"`          // 插件类型，默认 hermes
-	CliPath      string `yaml:"cli_path"`      // CLI 路径，默认 hermes
-	DefaultModel string `yaml:"default_model"` // 兼容旧配置；新部署请在设置页配置
-	APIURL       string `yaml:"api_url"`       // 兼容旧配置；新部署请在设置页配置
-	APIToken     string `yaml:"api_token"`     // 兼容旧配置；新部署请在设置页配置
-	HermesHome   string `yaml:"hermes_home"`   // Callme 管理的 HERMES_HOME（正式知识 + Hermes 自学习审计）
-	WorkDir      string `yaml:"work_dir"`      // 会话工作目录根
-	SystemPrompt string `yaml:"system_prompt"` // 兼容旧配置；新部署请在设置页配置
+	Type          string        `yaml:"type"`           // 插件类型，默认 hermes
+	CliPath       string        `yaml:"cli_path"`       // CLI 路径，默认 hermes
+	DefaultModel  string        `yaml:"default_model"`  // 兼容旧配置；新部署请在设置页配置
+	APIURL        string        `yaml:"api_url"`        // 兼容旧配置；新部署请在设置页配置
+	APIToken      string        `yaml:"api_token"`      // 兼容旧配置；新部署请在设置页配置
+	HermesHome    string        `yaml:"hermes_home"`    // Callme 管理的 HERMES_HOME（正式知识 + Hermes 自学习审计）
+	WorkDir       string        `yaml:"work_dir"`       // 会话工作目录根
+	SystemPrompt  string        `yaml:"system_prompt"`  // 兼容旧配置；新部署请在设置页配置
+	PromptTimeout time.Duration `yaml:"prompt_timeout"` // ACP 单轮回答最长等待时间；负数表示不主动超时
 }
 
 // SessionConfig 坐席制会话池配置
@@ -102,8 +103,9 @@ func defaultConfig() *Config {
 		Server:   ServerConfig{Host: "0.0.0.0", Port: 8090},
 		Database: DatabaseConfig{Driver: "sqlite", DSN: "data/callme.db"},
 		Agent: AgentConfig{
-			Type:    "hermes",
-			CliPath: "hermes",
+			Type:          "hermes",
+			CliPath:       "hermes",
+			PromptTimeout: 30 * time.Minute,
 		},
 		Session: SessionConfig{
 			MaxActive:        5,
@@ -143,6 +145,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Agent.WorkDir == "" {
 		c.Agent.WorkDir = "data/workdir"
+	}
+	if c.Agent.PromptTimeout == 0 {
+		c.Agent.PromptTimeout = 30 * time.Minute
 	}
 	if c.Auth.TokenTTL <= 0 {
 		c.Auth.TokenTTL = 7 * 24 * time.Hour

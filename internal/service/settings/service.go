@@ -78,13 +78,14 @@ func (s *Service) AgentSpec() agent.AgentSpec {
 		cliPath = agent.DefaultPathFor(s.agent.Type)
 	}
 	return agent.AgentSpec{
-		Type:         s.agent.Type,
-		CliPath:      cliPath,
-		DefaultModel: s.agent.DefaultModel,
-		APIURL:       s.agent.APIURL,
-		APIToken:     s.agent.APIToken,
-		HermesHome:   s.agentCfg.HermesHome,
-		SystemPrompt: s.agent.SystemPrompt,
+		Type:          s.agent.Type,
+		CliPath:       cliPath,
+		DefaultModel:  s.agent.DefaultModel,
+		APIURL:        s.agent.APIURL,
+		APIToken:      s.agent.APIToken,
+		HermesHome:    s.agentCfg.HermesHome,
+		SystemPrompt:  s.agent.SystemPrompt,
+		PromptTimeout: s.agentCfg.PromptTimeout,
 	}
 }
 

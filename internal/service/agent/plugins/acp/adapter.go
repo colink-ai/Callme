@@ -40,9 +40,9 @@ type AdapterConfig struct {
 const maxStderrSize = 64 * 1024
 const startupTimeout = 45 * time.Second
 
-// promptTimeout 单轮回答上限。模型/网关极端慢或挂死时（如某些视觉端点处理图片
-// 可能数分钟无响应），超时让本轮干净失败，避免 UI 永远卡在"正在生成回复"。
-const promptTimeout = 5 * time.Minute
+// defaultPromptTimeout 单轮回答默认上限。内网模型、长上下文和工具调用可能需要较长时间，
+// 所以默认值只作为兜底；生产可通过 agent.prompt_timeout 调整，负数表示不主动超时。
+const defaultPromptTimeout = 30 * time.Minute
 
 type acpSession struct {
 	id           string // ACP 协议会话 ID
@@ -52,7 +52,7 @@ type acpSession struct {
 	status       agent.SessionStatus
 	nativeResume bool
 	stderrOutput strings.Builder
-	onChunk      func(agent.Chunk) // 当前轮的流式回调（Prompt 期间有效）
+	onChunk      func(agent.Chunk)     // 当前轮的流式回调（Prompt 期间有效）
 	req          *agent.SessionRequest // 保留以便会话结束时插件回调
 	mu           sync.Mutex
 }
@@ -259,8 +259,12 @@ func (a *BaseAdapter) Prompt(ctx context.Context, sessionID string, input string
 		session.mu.Unlock()
 	}()
 
-	// 给单轮回答设上限：模型/网关挂死时干净失败，而不是无限阻塞占着坐席。
-	promptCtx, cancel := context.WithTimeout(ctx, promptTimeout)
+	// 给单轮回答设可配置上限：模型/网关挂死时干净失败，而不是无限阻塞占着坐席。
+	promptTimeout := session.req.Spec.PromptTimeout
+	if promptTimeout == 0 {
+		promptTimeout = defaultPromptTimeout
+	}
+	promptCtx, cancel := promptContext(ctx, promptTimeout)
 	defer cancel()
 	promptResult, err := session.transport.SendRequestContext(promptCtx, "session/prompt", &acpPromptParams{
 		SessionID: session.id,
@@ -278,6 +282,13 @@ func (a *BaseAdapter) Prompt(ctx context.Context, sessionID string, input string
 		LogDebug("ACP: prompt finished", zap.String("sessionID", sessionID), zap.String("stopReason", promptResp.StopReason))
 	}
 	return nil
+}
+
+func promptContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout < 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 func buildContentBlocks(text string, images []agent.ImageContent) []acpContentBlock {

@@ -46,6 +46,32 @@ Callme 的目标是成为企业内部的“智能问题解决层”：
 
 > 图片输入依赖底层 Agent 与模型的多模态能力。如果 Agent 的 ACP 实现暂不接受 image content block，会返回协议参数错误；此时需要切换支持图片的 Agent/模型，或在适配器中增加对应 Agent 的图片传输格式。
 
+## 界面预览
+
+### 智能问答
+
+面向研发与平台问题的一站式问答入口，支持历史会话、Agent 回答、图片输入、停止生成、继续追问和转人工。
+
+![Callme 智能问答界面](docs/screenshots/chat.png)
+
+### 知识沉淀
+
+支持人工录入、AI 生成候选知识、客服知识审批、Hermes 自学习审计和正式知识管理，让经验沉淀进入可控流程。
+
+![Callme 知识沉淀界面](docs/screenshots/curation.png)
+
+### 会话监控
+
+管理员可以查看活跃会话、排队队列和最近结束的会话，结合用户、时间范围、会话时长和结束原因定位资源占用与服务质量。
+
+![Callme 会话监控界面](docs/screenshots/monitor.png)
+
+### 用户与角色
+
+支持多角色用户、并发会话额度和角色切换，普通用户、VIP、知识专员、知识专家和管理员可以拥有不同功能边界。
+
+![Callme 用户管理界面](docs/screenshots/users.png)
+
 ## 技术架构
 
 ![Callme 技术架构图](docs/callme-architecture.png)
@@ -163,6 +189,13 @@ data/callme.db            SQLite 数据库
 data/hermes-home          Hermes 持久化目录，可能包含模型配置、记忆和 Token
 data/workdir              会话工作目录
 logs/callme.log           服务日志
+```
+
+内网模型网关、长回答或多工具调用场景下，Agent 单轮回答可能超过默认时长。可在 `configs/config.yaml` 中调整：
+
+```yaml
+agent:
+  prompt_timeout: 30m # 负数表示不主动超时
 ```
 
 ## Agent 与 MCP
@@ -368,6 +401,7 @@ npm run build --prefix web
 - 图片输入需要逐个 Agent 验证协议格式与模型能力。
 - Hermes / OpenCode 的原生 resume 行为需要继续回归测试。
 - 生产知识库 MCP 的鉴权、超时、重试、健康检查策略需要和企业内网环境对齐。
+- 内网部署如出现 Agent 回答中途停止，优先检查 `agent.prompt_timeout`、反向代理 WebSocket 超时和模型网关超时。
 - `data/hermes-home` 可能包含敏感信息，备份和升级目录需要配置合适的文件权限。
 - 大型前端 chunk 目前有 Vite 警告，后续可按页面拆包优化。
 

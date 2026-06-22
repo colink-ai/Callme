@@ -152,6 +152,42 @@ body,
   border-left: 3px solid var(--border-light);
 }
 
+.hermes-review-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+.hermes-review-pane .ant-card-body {
+  height: 520px;
+  padding: 10px;
+}
+.hermes-review-editor {
+  height: 100% !important;
+  resize: none !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  line-height: 1.7;
+}
+.hermes-review-preview {
+  height: 100%;
+  max-height: none;
+  overflow-x: hidden;
+  word-break: break-word;
+}
+.hermes-review-preview pre,
+.hermes-review-preview table {
+  max-width: 100%;
+}
+
+@media (max-width: 900px) {
+  .hermes-review-split {
+    grid-template-columns: 1fr;
+  }
+  .hermes-review-pane .ant-card-body {
+    height: 360px;
+  }
+}
+
 .ai-task-float-trigger {
   position: fixed;
   right: 24px;
@@ -174,32 +210,62 @@ body,
 }
 .ai-task-list {
   display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 2px;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 132px;
+  overflow: auto;
+  padding-right: 2px;
 }
 .ai-task-list-item {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-  max-width: 220px;
-  padding: 6px 8px;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 8px;
   border: 1px solid var(--border-light);
   border-radius: 6px;
   background: var(--bg-container);
   color: var(--text-primary);
   cursor: pointer;
+  text-align: left;
 }
 .ai-task-list-item.active {
   border-color: var(--primary-color);
   background: color-mix(in srgb, var(--primary-color) 10%, var(--bg-container));
 }
+.ai-task-list-main {
+  min-width: 0;
+}
 .ai-task-list-title {
+  display: block;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   font-size: 13px;
+  font-weight: 600;
+}
+.ai-task-list-source {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.ai-task-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  color: var(--text-tertiary);
+}
+.ai-task-remove:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
 }
 .ai-task-output {
   max-height: 360px;

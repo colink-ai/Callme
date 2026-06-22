@@ -227,7 +227,7 @@ export const api = {
   },
   listLearningJobs: () =>
     http.get<{ jobs: LearningJob[] | null }>('/learning/jobs').then((r) => r.data.jobs ?? []),
-  runLearningJob: () => http.post('/learning/jobs/run'),
+  runLearningJob: () => http.post<{ job: LearningJob }>('/learning/jobs/run').then((r) => r.data.job),
 
   // 工单
   createHandoff: (sessionId: string, reason: string) =>

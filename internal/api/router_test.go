@@ -540,7 +540,7 @@ func TestKnowledgeFeedbackHandoffAndUserRoutes(t *testing.T) {
 	}
 
 	rr = h.do(http.MethodPost, "/api/v1/learning/jobs/run", expertToken, string(model.UserRoleKnowledgeExpert), nil)
-	if rr.Code != http.StatusOK {
+	if rr.Code != http.StatusAccepted {
 		t.Fatalf("run learning job status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	rr = h.do(http.MethodGet, "/api/v1/learning/jobs", expertToken, string(model.UserRoleKnowledgeExpert), nil)

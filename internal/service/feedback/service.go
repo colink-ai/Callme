@@ -293,52 +293,67 @@ func (s *Service) distillOnce(ctx context.Context) error {
 }
 
 func (s *Service) aiLearnFromHistory(ctx context.Context) error {
-	now := time.Now()
+	job, err := s.createLearningJob(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = s.runLearningJob(ctx, job)
+	return err
+}
+
+func (s *Service) createLearningJob(ctx context.Context) (*model.LearningJob, error) {
 	job := &model.LearningJob{
 		ID:        uuid.New().String(),
 		Source:    "history",
 		Status:    model.LearningJobStatusRunning,
-		StartedAt: now,
+		StartedAt: time.Now(),
 	}
 	if err := s.store.CreateLearningJob(ctx, job); err != nil {
-		return err
+		return nil, err
 	}
+	return job, nil
+}
+
+func (s *Service) runLearningJob(ctx context.Context, job *model.LearningJob) (*model.LearningJob, error) {
 	finish := func(status model.LearningJobStatus, errText string) error {
 		done := time.Now()
 		job.Status = status
 		job.Error = errText
 		job.FinishedAt = &done
-		return s.store.UpdateLearningJob(ctx, job)
+		updateCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return s.store.UpdateLearningJob(updateCtx, job)
 	}
 
 	if s.agentSpec == nil {
-		return finish(model.LearningJobStatusSkipped, "未配置 AI 模型")
+		return job, finish(model.LearningJobStatusSkipped, "未配置 AI 模型")
 	}
 	spec := s.agentSpec()
 	if spec.APIURL == "" || spec.APIToken == "" || spec.DefaultModel == "" {
-		return finish(model.LearningJobStatusSkipped, "未配置 API Base URL、Token 或模型")
+		return job, finish(model.LearningJobStatusSkipped, "未配置 API Base URL、Token 或模型")
 	}
 
+	now := time.Now()
 	start := now.Add(-24 * time.Hour)
 	sessions, _, err := s.store.ListClosedSessions(ctx, &start, &now, "", 1, 20)
 	if err != nil {
 		_ = finish(model.LearningJobStatusFailed, err.Error())
-		return err
+		return job, err
 	}
 	job.InputSessions = len(sessions)
 	if len(sessions) == 0 {
-		return finish(model.LearningJobStatusSkipped, "最近 24 小时没有可挖掘的历史会话")
+		return job, finish(model.LearningJobStatusSkipped, "最近 24 小时没有可挖掘的历史会话")
 	}
 
 	transcript, sourceIDs := s.buildLearningTranscript(ctx, sessions)
 	if transcript == "" {
-		return finish(model.LearningJobStatusSkipped, "历史会话没有有效消息")
+		return job, finish(model.LearningJobStatusSkipped, "历史会话没有有效消息")
 	}
 
 	candidates, err := runAILearning(ctx, spec, transcript)
 	if err != nil {
 		_ = finish(model.LearningJobStatusFailed, err.Error())
-		return err
+		return job, err
 	}
 	for _, c := range candidates {
 		now := time.Now()
@@ -367,11 +382,11 @@ func (s *Service) aiLearnFromHistory(ctx context.Context) error {
 			UpdatedAt:       now,
 		}); err != nil {
 			_ = finish(model.LearningJobStatusFailed, err.Error())
-			return err
+			return job, err
 		}
 		job.OutputAssets++
 	}
-	return finish(model.LearningJobStatusSucceeded, "")
+	return job, finish(model.LearningJobStatusSucceeded, "")
 }
 
 func (s *Service) buildLearningTranscript(ctx context.Context, sessions []*model.Session) (string, []string) {
@@ -547,12 +562,50 @@ func (s *Service) AssistHermesLearningEditStream(ctx context.Context, id string,
 
 // ListLearningJobs 列出 AI 学习任务执行历史。
 func (s *Service) ListLearningJobs(ctx context.Context) ([]*model.LearningJob, error) {
-	return s.store.ListLearningJobs(ctx, 100)
+	jobs, err := s.store.ListLearningJobs(ctx, 100)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	for _, job := range jobs {
+		if job.Status != model.LearningJobStatusRunning || now.Sub(job.StartedAt) <= 5*time.Minute {
+			continue
+		}
+		finished := now
+		job.Status = model.LearningJobStatusFailed
+		job.Error = "任务异常中断，请重新触发"
+		job.FinishedAt = &finished
+		if err := s.store.UpdateLearningJob(ctx, job); err != nil {
+			s.logger.Warn("failed to mark stale learning job", zap.String("jobID", job.ID), zap.Error(err))
+		}
+	}
+	return jobs, nil
 }
 
 // RunLearningJobNow 立即执行一次 AI 历史会话学习任务。
 func (s *Service) RunLearningJobNow(ctx context.Context) error {
-	return s.aiLearnFromHistory(ctx)
+	job, err := s.createLearningJob(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = s.runLearningJob(ctx, job)
+	return err
+}
+
+// StartLearningJobNow 异步启动一次 AI 历史会话学习任务，立即返回任务记录。
+func (s *Service) StartLearningJobNow(ctx context.Context) (*model.LearningJob, error) {
+	job, err := s.createLearningJob(ctx)
+	if err != nil {
+		return nil, err
+	}
+	go func(job *model.LearningJob) {
+		runCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		if _, err := s.runLearningJob(runCtx, job); err != nil {
+			s.logger.Warn("manual AI learning job failed", zap.String("jobID", job.ID), zap.Error(err))
+		}
+	}(job)
+	return job, nil
 }
 
 // CreateManualDraft 根据管理员描述生成一条待审批候选知识。
@@ -1102,11 +1155,32 @@ func aiManualDraftDisplayContent(draft *aiLearningCandidate) string {
 	if draft == nil {
 		return ""
 	}
-	data, err := json.MarshalIndent(draft, "", "  ")
-	if err != nil {
-		return strings.TrimSpace(draft.Content)
+	var b strings.Builder
+	if strings.TrimSpace(draft.Title) != "" {
+		b.WriteString("# ")
+		b.WriteString(strings.TrimSpace(draft.Title))
+		b.WriteString("\n\n")
 	}
-	return string(data)
+	if strings.TrimSpace(draft.Question) != "" {
+		b.WriteString("**建议问题：** ")
+		b.WriteString(strings.TrimSpace(draft.Question))
+		b.WriteString("\n\n")
+	}
+	if strings.TrimSpace(draft.Content) != "" {
+		b.WriteString(strings.TrimSpace(draft.Content))
+		b.WriteString("\n\n")
+	}
+	if draft.Confidence > 0 {
+		b.WriteString("**置信度：** ")
+		b.WriteString(fmt.Sprintf("%.0f%%", draft.Confidence*100))
+		b.WriteString("\n\n")
+	}
+	if strings.TrimSpace(draft.Reason) != "" {
+		b.WriteString("**生成依据：** ")
+		b.WriteString(strings.TrimSpace(draft.Reason))
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func runAIManualDraftStream(ctx context.Context, spec agent.AgentSpec, req ManualDraftRequest, onDelta func(string) error) (*aiLearningCandidate, string, error) {

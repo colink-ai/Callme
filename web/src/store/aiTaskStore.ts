@@ -22,6 +22,8 @@ interface AITaskState {
   setTaskContent: (id: string, content: string) => void;
   finishTask: (id: string) => void;
   failTask: (id: string, error: string) => void;
+  removeTask: (id: string) => void;
+  clearFinishedTasks: () => void;
   setActiveTask: (id: string) => void;
   setPanelOpen: (open: boolean) => void;
 }
@@ -75,6 +77,20 @@ export const useAITaskStore = create<AITaskState>((set) => ({
       task.id === id ? { ...task, status: 'failed', error, updatedAt: now() } : task
     )),
   })),
+  removeTask: (id) => set((state) => {
+    const tasks = state.tasks.filter((task) => task.id !== id);
+    return {
+      tasks,
+      activeTaskId: state.activeTaskId === id ? tasks[0]?.id : state.activeTaskId,
+    };
+  }),
+  clearFinishedTasks: () => set((state) => {
+    const tasks = state.tasks.filter((task) => task.status === 'running');
+    return {
+      tasks,
+      activeTaskId: tasks.some((task) => task.id === state.activeTaskId) ? state.activeTaskId : tasks[0]?.id,
+    };
+  }),
   setActiveTask: (id) => set({ activeTaskId: id, panelOpen: true }),
   setPanelOpen: (open) => set({ panelOpen: open }),
 }));

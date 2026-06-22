@@ -669,11 +669,12 @@ func (d *Deps) listLearningJobs(c *gin.Context) {
 }
 
 func (d *Deps) runLearningJob(c *gin.Context) {
-	if err := d.Feedback.RunLearningJobNow(c.Request.Context()); err != nil {
+	job, err := d.Feedback.StartLearningJobNow(c.Request.Context())
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	c.JSON(http.StatusAccepted, gin.H{"job": job})
 }
 
 func (d *Deps) createManualKnowledgeDraft(c *gin.Context) {

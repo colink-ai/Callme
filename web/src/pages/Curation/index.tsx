@@ -1,7 +1,7 @@
 // 管理员「知识沉淀」审批页（自学习沙箱）
 // 反馈蒸馏出的候选资产在此审批：查看来源证据 → 编辑 → 通过(发布为正式知识)/拒绝。
 // 任何候选在通过前都不会进入生产回答链路。
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -27,6 +27,7 @@ import dayjs from 'dayjs';
 import { api, apiErrorMessage } from '../../api/client';
 import { useAuthStore } from '../../store/authStore';
 import { useAITaskStore } from '../../store/aiTaskStore';
+import { formatAITaskContent } from '../../utils/aiTaskFormat';
 import type {
   CandidateAsset,
   CandidateAssetStatus,
@@ -122,6 +123,7 @@ export default function CurationPage() {
   const [jobs, setJobs] = useState<LearningJob[]>([]);
   const [approvedNotes, setApprovedNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  const [learningStarting, setLearningStarting] = useState(false);
   const [reviewingHermesID, setReviewingHermesID] = useState<string | null>(null);
   const [viewingHermes, setViewingHermes] = useState<HermesLearningAsset | null>(null);
   const [hermesDraftContent, setHermesDraftContent] = useState('');
@@ -136,6 +138,18 @@ export default function CurationPage() {
   const [manualImages, setManualImages] = useState<ImageAttachment[]>([]);
   const [manualStreaming, setManualStreaming] = useState(false);
   const [manualStreamContent, setManualStreamContent] = useState('');
+  const hermesEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const hermesPreviewRef = useRef<HTMLDivElement | null>(null);
+
+  const syncHermesPreviewScroll = useCallback(() => {
+    const editor = hermesEditorRef.current;
+    const preview = hermesPreviewRef.current;
+    if (!editor || !preview) return;
+    const maxFrom = editor.scrollHeight - editor.clientHeight;
+    const maxTo = preview.scrollHeight - preview.clientHeight;
+    if (maxFrom <= 0 || maxTo <= 0) return;
+    preview.scrollTop = (editor.scrollTop / maxFrom) * maxTo;
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -166,6 +180,19 @@ export default function CurationPage() {
     }
     load();
   }, [canReview, candidateView, load, track]);
+
+  useEffect(() => {
+    if (track !== 'candidates' || candidateView !== 'jobs') return;
+    if (!jobs.some((job) => job.status === 'running')) return;
+    const timer = window.setInterval(async () => {
+      try {
+        setJobs(await api.listLearningJobs());
+      } catch (err) {
+        message.error(apiErrorMessage(err));
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [track, candidateView, jobs]);
 
   useEffect(() => {
     if (!viewingHermes) {
@@ -201,17 +228,17 @@ export default function CurationPage() {
   };
 
   const runLearningJob = async () => {
-    setLoading(true);
+    setLearningStarting(true);
     try {
-      await api.runLearningJob();
-      message.success('AI 学习任务已执行');
+      const job = await api.runLearningJob();
+      message.success('AI 学习任务已开始');
       setTrack('candidates');
       setCandidateView('jobs');
-      setJobs(await api.listLearningJobs());
+      setJobs((prev) => [job, ...prev.filter((item) => item.id !== job.id)]);
     } catch (err) {
       message.error(apiErrorMessage(err));
     } finally {
-      setLoading(false);
+      setLearningStarting(false);
     }
   };
 
@@ -240,11 +267,16 @@ export default function CurationPage() {
       message.warning('请先输入希望 AI 修改的要求');
       return;
     }
+    const draftBeforeEdit = hermesDraftContent.trim();
+    if (!draftBeforeEdit) {
+      message.warning('当前审计内容为空，无法生成修订稿。可以先补充内容，或直接删除这条空文件记录。');
+      return;
+    }
     setHermesAILoading(true);
     const taskId = startTask({ title: 'AI 修订 Hermes 内容', source: '知识沉淀 / Hermes 审计' });
     setHermesDraftContent('');
     try {
-      await api.streamHermesLearningEdit(viewingHermes.id, hermesAIInstruction.trim(), hermesDraftContent, (event) => {
+      await api.streamHermesLearningEdit(viewingHermes.id, hermesAIInstruction.trim(), draftBeforeEdit, (event) => {
         if (event.type === 'status') {
           setTaskContent(taskId, event.content ?? '');
         }
@@ -525,7 +557,7 @@ export default function CurationPage() {
               <Card size="small" title="AI 生成过程">
                 <div className={`hermes-asset-preview markdown-body ${manualStreaming ? 'streaming-cursor' : ''}`}>
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {manualStreamContent || '正在连接 AI，请稍候…'}
+                    {manualStreamContent ? formatAITaskContent(manualStreamContent) : '正在连接 AI，请稍候…'}
                   </ReactMarkdown>
                 </div>
               </Card>
@@ -541,7 +573,7 @@ export default function CurationPage() {
               </Paragraph>
             </div>
             <Space>
-              <Button type="primary" onClick={runLearningJob} loading={loading}>
+              <Button type="primary" onClick={runLearningJob} loading={learningStarting}>
                 立即开始挖掘
               </Button>
               <Button onClick={() => {
@@ -792,19 +824,26 @@ export default function CurationPage() {
                 </Space>
               </Card>
             )}
-            <Card size="small" title="人工编辑">
-              <Input.TextArea
-                rows={12}
-                value={hermesDraftContent}
-                onChange={(e) => setHermesDraftContent(e.target.value)}
-                disabled={viewingHermes.status !== 'pending_review'}
-              />
-            </Card>
-            <Card size="small" title="内容预览">
-              <div className="hermes-asset-preview markdown-body">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{hermesDraftContent}</ReactMarkdown>
-              </div>
-            </Card>
+            <div className="hermes-review-split">
+              <Card size="small" title="编写稿" className="hermes-review-pane">
+                <Input.TextArea
+                  ref={hermesEditorRef}
+                  value={hermesDraftContent}
+                  onChange={(e) => setHermesDraftContent(e.target.value)}
+                  onScroll={syncHermesPreviewScroll}
+                  disabled={viewingHermes.status !== 'pending_review'}
+                  className="hermes-review-editor"
+                />
+              </Card>
+              <Card size="small" title="预览" className="hermes-review-pane">
+                <div
+                  ref={hermesPreviewRef}
+                  className="hermes-asset-preview markdown-body hermes-review-preview"
+                >
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{hermesDraftContent}</ReactMarkdown>
+                </div>
+              </Card>
+            </div>
             {viewingHermes.status === 'pending_review' && (
               <Text type="secondary">
                 可以人工修改，也可以让 AI 生成修订稿；只有点击“保存修改并生效”才会写回 Hermes 文件。

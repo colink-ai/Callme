@@ -1,9 +1,10 @@
-import { Button, Card, Empty, Space, Tag, Typography } from 'antd';
-import { CloseOutlined, RobotOutlined } from '@ant-design/icons';
+import { Button, Card, Empty, Space, Tag, Tooltip, Typography } from 'antd';
+import { ClearOutlined, CloseOutlined, RobotOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAuthStore } from '../store/authStore';
 import { useAITaskStore, type AITaskStatus } from '../store/aiTaskStore';
+import { formatAITaskContent } from '../utils/aiTaskFormat';
 
 const { Text } = Typography;
 
@@ -17,12 +18,13 @@ const aiTaskRoles = new Set(['knowledge_staff', 'knowledge_expert', 'admin']);
 
 export default function AITaskPanel() {
   const { user, activeRole } = useAuthStore();
-  const { tasks, activeTaskId, panelOpen, setActiveTask, setPanelOpen } = useAITaskStore();
+  const { tasks, activeTaskId, panelOpen, setActiveTask, setPanelOpen, removeTask, clearFinishedTasks } = useAITaskStore();
   const roles = user?.roles?.length ? user.roles : user ? [user.role] : [];
   const usingRole = activeRole && roles.includes(activeRole as typeof roles[number]) ? activeRole : user?.role;
   if (!usingRole || !aiTaskRoles.has(usingRole)) return null;
 
   const runningCount = tasks.filter((task) => task.status === 'running').length;
+  const finishedCount = tasks.length - runningCount;
   const activeTask = tasks.find((task) => task.id === activeTaskId) || tasks[0];
 
   if (!panelOpen) {
@@ -49,7 +51,16 @@ export default function AITaskPanel() {
           {runningCount > 0 && <Tag color="processing">{runningCount} 个运行中</Tag>}
         </Space>
       )}
-      extra={<Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setPanelOpen(false)} />}
+      extra={(
+        <Space size={2}>
+          {finishedCount > 0 && (
+            <Tooltip title="清除已结束任务">
+              <Button type="text" size="small" icon={<ClearOutlined />} onClick={clearFinishedTasks} />
+            </Tooltip>
+          )}
+          <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setPanelOpen(false)} />
+        </Space>
+      )}
     >
       {tasks.length === 0 ? (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无 AI 任务" />
@@ -65,8 +76,22 @@ export default function AITaskPanel() {
                   className={`ai-task-list-item ${activeTask?.id === task.id ? 'active' : ''}`}
                   onClick={() => setActiveTask(task.id)}
                 >
-                  <span className="ai-task-list-title">{task.title}</span>
+                  <span className="ai-task-list-main">
+                    <span className="ai-task-list-title">{task.title}</span>
+                    <span className="ai-task-list-source">{task.source}</span>
+                  </span>
                   <Tag color={meta.color} style={{ margin: 0 }}>{meta.label}</Tag>
+                  {task.status !== 'running' && (
+                    <span
+                      className="ai-task-remove"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        removeTask(task.id);
+                      }}
+                    >
+                      <CloseOutlined />
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -80,7 +105,7 @@ export default function AITaskPanel() {
               </Space>
               <div className={`ai-task-output markdown-body ${activeTask.status === 'running' ? 'streaming-cursor' : ''}`}>
                 {activeTask.content ? (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{activeTask.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{formatAITaskContent(activeTask.content)}</ReactMarkdown>
                 ) : (
                   <Text type="secondary">等待 AI 输出…</Text>
                 )}

@@ -343,7 +343,7 @@ func TestParseHelpersAndValidationErrors(t *testing.T) {
 	if _, err := parseAIManualDraftContent("not-json"); err == nil {
 		t.Fatal("invalid manual draft json should fail")
 	}
-	if got := aiManualDraftDisplayContent(&aiLearningCandidate{Title: "T", Content: "C"}); !strings.Contains(got, `"title": "T"`) {
+	if got := aiManualDraftDisplayContent(&aiLearningCandidate{Title: "T", Content: "C"}); !strings.Contains(got, "# T") || !strings.Contains(got, "C") {
 		t.Fatalf("display content = %s", got)
 	}
 	if aiManualDraftDisplayContent(nil) != "" {

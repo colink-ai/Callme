@@ -31,6 +31,64 @@ agent:
 	}
 }
 
+func TestApplyDefaultsAndAddr(t *testing.T) {
+	cfg := loadTestConfig(t, `
+server:
+  host: 127.0.0.1
+  port: 18090
+agent:
+  type: ""
+  cli_path: ""
+  hermes_home: ""
+  work_dir: ""
+auth:
+  token_ttl: 0s
+session:
+  max_active: 0
+  max_queue: -1
+  max_per_client: 0
+  idle_warn_after: 0s
+  idle_close_after: 1s
+  max_duration: 0s
+  queue_poll_seconds: 0
+feedback:
+  distill_interval: 0s
+  audit_interval: 0s
+  notes_max_entries: 0
+log:
+  max_size: 0
+  max_backups: 0
+  max_age: 0
+`)
+	if got := cfg.Server.Addr(); got != "127.0.0.1:18090" {
+		t.Fatalf("Addr=%q", got)
+	}
+	if cfg.Agent.Type != "hermes" || cfg.Agent.CliPath != "hermes" {
+		t.Fatalf("agent defaults not applied: %+v", cfg.Agent)
+	}
+	if cfg.Agent.HermesHome != "data/hermes-home" || cfg.Agent.WorkDir != "data/workdir" {
+		t.Fatalf("agent paths not defaulted: %+v", cfg.Agent)
+	}
+	if cfg.Auth.TokenTTL != 7*24*time.Hour {
+		t.Fatalf("token ttl default=%s", cfg.Auth.TokenTTL)
+	}
+	if cfg.Session.MaxActive != 5 || cfg.Session.MaxQueue != 50 || cfg.Session.MaxPerClient != 1 {
+		t.Fatalf("session capacity defaults not applied: %+v", cfg.Session)
+	}
+	if cfg.Session.IdleWarnAfter != 5*time.Minute || cfg.Session.IdleCloseAfter != 10*time.Minute {
+		t.Fatalf("idle defaults not applied: %+v", cfg.Session)
+	}
+	if cfg.Session.MaxDuration != 2*time.Hour || cfg.Session.QueuePollSeconds != 5 {
+		t.Fatalf("session duration defaults not applied: %+v", cfg.Session)
+	}
+	if cfg.Feedback.DistillInterval != time.Hour || cfg.Feedback.AuditInterval != 10*time.Minute || cfg.Feedback.NotesMaxEntries != 200 {
+		t.Fatalf("feedback defaults not applied: %+v", cfg.Feedback)
+	}
+	if cfg.Log.MaxSize != 100 || cfg.Log.MaxBackups != 3 || cfg.Log.MaxAge != 7 {
+		t.Fatalf("log defaults not applied: %+v", cfg.Log)
+	}
+}
+
 func loadTestConfig(t *testing.T, body string) *Config {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")

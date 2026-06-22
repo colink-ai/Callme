@@ -1,6 +1,7 @@
-.PHONY: build build-server build-web test run run-all dev-web mock-kb clean start stop status package package-arm64
+.PHONY: build build-server build-web test test-coverage test-web test-e2e test-all run run-all dev-web mock-kb clean start stop status package package-arm64
 
 VERSION := $(shell cat VERSION 2>/dev/null || echo dev)
+COVERAGE_THRESHOLD ?= 75.0
 
 # 完整构建：前端 + 后端
 build: build-web build-server
@@ -14,6 +15,20 @@ build-web:
 
 test:
 	go test ./...
+
+test-coverage:
+	go test ./internal/... -coverprofile=coverage.out
+	@coverage=$$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%","",$$3); print $$3}'); \
+	  awk -v cov="$$coverage" -v min="$(COVERAGE_THRESHOLD)" 'BEGIN { exit !(cov+0 >= min+0) }' && \
+	  echo "internal coverage $$coverage% >= $(COVERAGE_THRESHOLD)%"
+
+test-web:
+	cd web && npm run build:check
+
+test-e2e:
+	cd web && npm run test:e2e
+
+test-all: test test-web test-e2e
 
 # 本地 mock 知识库（MCP over HTTP），监听 :9100（仅本地测试用）
 mock-kb:

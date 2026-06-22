@@ -230,6 +230,9 @@ make build          # 构建前端与后端
 make build-server   # 构建后端和 mock-kb
 make build-web      # 构建前端
 make test           # 后端测试
+make test-web       # 前端类型检查与生产构建
+make test-e2e       # 前后端联动 E2E 测试
+make test-all       # 后端 + 前端构建 + E2E
 make run            # 构建并运行后端
 make run-all        # mock-kb + 后端
 make dev-web        # 前端开发模式
@@ -241,6 +244,31 @@ WebSocket 冒烟：
 
 ```bash
 go run ./tools/wsprobe -session <session-id> -msg "问题"
+```
+
+### 测试体系
+
+Callme 的自动化测试按三层组织：
+
+| 层级 | 命令 | 覆盖重点 |
+| :-- | :-- | :-- |
+| 后端单元 / 集成测试 | `make test` | 数据库迁移、仓储、坐席池、会话生命周期、反馈沉淀、权限与 API 边界 |
+| 前端构建检查 | `make test-web` | TypeScript 类型检查、生产构建可用性 |
+| 前后端联动 E2E | `make test-e2e` | 浏览器注册登录、创建会话、WebSocket 发问、mock ACP Agent 流式回答、知识引用展示 |
+
+第一次运行 E2E 前需要安装 Playwright 浏览器：
+
+```bash
+cd web
+npx playwright install chromium
+```
+
+E2E 使用 `auto-test/mock-acp-agent.py` 作为无外部依赖的 ACP Agent，并由 `auto-test/e2e-server.sh` 生成临时 SQLite、临时 `HERMES_HOME` 和临时工作目录，不会污染本地 `data/`。
+
+版本发布或合并前建议执行：
+
+```bash
+make test-all
 ```
 
 ### 新增数据库变更

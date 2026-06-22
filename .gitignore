@@ -5,6 +5,9 @@
 web/dist/
 web/node_modules/
 node_modules/
+web/test-results/
+web/playwright-report/
+coverage.out
 
 # 运行时数据与密钥（含 SQLite 库、Hermes 持久化 config.yaml/记忆，切勿提交）
 /data/

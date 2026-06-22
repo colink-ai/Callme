@@ -43,7 +43,7 @@ def main():
             text = "".join(b.get("text", "") for b in params.get("prompt", []))
             # 模拟知识检索工具调用（验证引用展示链路）
             notify(sid, {"sessionUpdate": "tool_call", "toolCallId": "tc-1",
-                         "status": "in_progress", "title": "code-graph",
+                         "status": "in_progress", "title": "mcp_code_graph_query",
                          "rawInput": {"query": text[:50]}})
             notify(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "tc-1",
                          "status": "completed",

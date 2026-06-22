@@ -21,6 +21,7 @@ interface ChatState {
   session: SessionView | null;
   connected: boolean;
   restoring: boolean;
+  starting: boolean;
   position: number; // 排队位置，0 表示未排队
   queueLen: number;
   messages: ChatMessage[];
@@ -69,6 +70,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   session: null,
   connected: false,
   restoring: false,
+  starting: false,
   position: 0,
   queueLen: 0,
   messages: [],
@@ -114,9 +116,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   startSession: async () => {
+    if (get().starting) return;
     const current = get().session;
     const canReuseCurrent = current && current.status !== 'closed' && !get().closedReason && get().connected;
     set({
+      starting: true,
       error: null,
       closedReason: null,
       messages: canReuseCurrent ? get().messages : [],
@@ -138,17 +142,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch (err) {
       const message = apiErrorMessage(err);
       if (message.includes('已有进行中的会话')) {
-        set({ session: null, closedReason: null });
+        set({ session: null, closedReason: null, starting: false });
         await get().restoreSession();
         return;
       }
       set({ error: message });
+    } finally {
+      set({ starting: false });
     }
   },
 
   continueSession: async (sessionId: string) => {
+    if (get().starting) return;
     closeSocket();
     set({
+      starting: true,
       error: null,
       closedReason: null,
       messages: [],
@@ -173,10 +181,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch (err) {
       const message = apiErrorMessage(err);
       if (message.includes('已有进行中的会话')) {
+        set({ starting: false });
         await get().restoreSession();
         return;
       }
       set({ error: message });
+    } finally {
+      set({ starting: false });
     }
   },
 
@@ -271,6 +282,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       session: null,
       connected: false,
       restoring: false,
+      starting: false,
       position: 0,
       queueLen: 0,
       messages: [],

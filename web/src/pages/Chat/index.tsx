@@ -365,6 +365,7 @@ function HistorySidebar({
   onDelete,
   onNew,
   onCollapse,
+  starting,
 }: {
   sessions: Session[];
   activeId: string | null;
@@ -373,6 +374,7 @@ function HistorySidebar({
   onDelete: (s: Session) => void;
   onNew: () => void;
   onCollapse: () => void;
+  starting: boolean;
 }) {
   const copySessionId = async (session: Session) => {
     try {
@@ -392,8 +394,8 @@ function HistorySidebar({
           </Tooltip>
           <Text strong>历史会话</Text>
         </Space>
-        <Button type="text" size="small" icon={<PlusOutlined />} onClick={onNew}>
-          新会话
+        <Button type="text" size="small" icon={<PlusOutlined />} loading={starting} disabled={starting} onClick={onNew}>
+          {starting ? '创建中' : '新会话'}
         </Button>
       </div>
       <div className="history-sidebar-list">
@@ -427,11 +429,12 @@ function HistorySidebar({
                       <Tooltip title="继续问答">
                         <Button
                           type="text"
-                        size="small"
-                        icon={<PlayCircleOutlined />}
-                        onClick={() => onContinue(s)}
-                      />
-                    </Tooltip>
+                          size="small"
+                          icon={<PlayCircleOutlined />}
+                          disabled={starting}
+                          onClick={() => onContinue(s)}
+                        />
+                      </Tooltip>
                     <Popconfirm
                       title="删除该历史会话？"
                       description="会同时删除该会话的消息、反馈和工单记录。"
@@ -463,6 +466,7 @@ export default function ChatPage() {
     queueLen,
     messages,
     restoring,
+    starting,
     thinking,
     busy,
     idleWarning,
@@ -585,7 +589,7 @@ export default function ChatPage() {
 
   const active = session?.status === 'active' && !closedReason;
   const queued = session?.status === 'queued' && !closedReason && position > 0;
-  const connecting = session?.status === 'queued' && !closedReason && position <= 0;
+  const connecting = (session?.status === 'queued' && !closedReason && position <= 0) || starting;
 
   const fileToImageAttachment = useCallback((file: File): Promise<ImageAttachment> => {
     return new Promise((resolve, reject) => {
@@ -707,6 +711,7 @@ export default function ChatPage() {
             if (!active && !queued && !connecting) startSession();
           }}
           onCollapse={() => toggleHistory(true)}
+          starting={starting}
         />
       )}
 
@@ -772,13 +777,13 @@ export default function ChatPage() {
                   <LogoIcon size={72} />
                   <Title level={3} style={{ margin: 0 }}>您好，我是 Callme 智能问题解决助手</Title>
                   <Text type="secondary">检索知识库 · 代码图谱 · 历史工单，帮你定位并解决研发与平台问题，越用越聪明</Text>
-                  {restoring ? (
+                  {restoring || starting ? (
                     <Space>
                       <Spin size="small" />
-                      <Text type="secondary">正在恢复会话…</Text>
+                      <Text type="secondary">{starting ? '正在创建会话…' : '正在恢复会话…'}</Text>
                     </Space>
                   ) : (
-                    <Button type="primary" size="large" onClick={startSession}>开始会话</Button>
+                    <Button type="primary" size="large" loading={starting} disabled={starting} onClick={startSession}>开始会话</Button>
                   )}
                 </div>
               )}

@@ -785,12 +785,27 @@ func (d *Deps) listTickets(c *gin.Context) {
 // ---------- 设置 ----------
 
 func (d *Deps) getAgentSettings(c *gin.Context) {
-	c.JSON(http.StatusOK, d.Settings.GetAgentSettings())
+	c.JSON(http.StatusOK, d.Settings.GetAgentProfiles())
 }
 
 func (d *Deps) updateAgentSettings(c *gin.Context) {
+	body, err := c.GetRawData()
+	if err != nil || len(body) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	var profiles model.AgentProfilesSettings
+	if err := json.Unmarshal(body, &profiles); err == nil && len(profiles.Profiles) > 0 {
+		if err := d.Settings.UpdateAgentProfiles(c.Request.Context(), profiles); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, d.Settings.GetAgentProfiles())
+		return
+	}
+
 	var req model.AgentSettings
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
@@ -798,7 +813,7 @@ func (d *Deps) updateAgentSettings(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, d.Settings.GetAgentSettings())
+	c.JSON(http.StatusOK, d.Settings.GetAgentProfiles())
 }
 
 func (d *Deps) getPoolSettings(c *gin.Context) {

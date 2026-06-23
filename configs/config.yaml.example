@@ -24,6 +24,12 @@ session:
   max_per_client: 1
 
 feedback:
+  # 标准 5 段 cron 表达式：分 时 日 月 周
+  # 自学习/历史会话 AI 挖掘：默认每小时第 0 分钟执行
+  distill_cron: "0 * * * *"
+  # Hermes skills/memories 自学习审计扫描：默认每 10 分钟执行
+  audit_cron: "*/10 * * * *"
+  # 兼容旧配置：未配置 cron 时才按 interval 轮询
   distill_interval: 1h
   audit_interval: 10m
   notes_max_entries: 200

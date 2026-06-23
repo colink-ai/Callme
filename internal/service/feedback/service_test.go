@@ -38,6 +38,20 @@ func newTestService(t *testing.T) (*Service, *repo.Store, string) {
 	return s, store, home
 }
 
+func TestRunScheduledFallsBackForInvalidCron(t *testing.T) {
+	s := &Service{logger: zap.NewNop(), stop: make(chan struct{})}
+	done := make(chan struct{}, 1)
+	go s.runScheduled("test", "bad cron", 10*time.Millisecond, func() {
+		done <- struct{}{}
+	})
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled fallback did not run")
+	}
+	s.Shutdown()
+}
+
 // 点踩+纠错蒸馏后应进入候选池(pending)，且不写任何生产可读文件
 func TestDistillProducesPendingCandidate(t *testing.T) {
 	s, store, home := newTestService(t)

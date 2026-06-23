@@ -204,6 +204,18 @@ export interface AgentSettings {
   updatedAt?: string;
 }
 
+export interface AgentProfile {
+  id: string;
+  name: string;
+  settings: AgentSettings;
+}
+
+export interface AgentProfilesSettings {
+  activeProfileId: string;
+  profiles: AgentProfile[];
+  updatedAt?: string;
+}
+
 export interface PoolSettings {
   maxActive: number;
   maxQueue: number;

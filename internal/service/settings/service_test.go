@@ -69,6 +69,62 @@ func TestAgentSettingsMaskingAndTokenRetention(t *testing.T) {
 	}
 }
 
+func TestAgentProfilesSwitchAndTokenRetention(t *testing.T) {
+	ctx := context.Background()
+	svc, store := newSettingsService(t)
+
+	initial := svc.GetAgentProfiles()
+	if len(initial.Profiles) != 1 || initial.ActiveProfileID != "default" {
+		t.Fatalf("initial profiles = %+v", initial)
+	}
+	if initial.Profiles[0].Settings.APIToken != "secr****oken" {
+		t.Fatalf("profile token should be masked, got %q", initial.Profiles[0].Settings.APIToken)
+	}
+
+	next := model.AgentProfilesSettings{
+		ActiveProfileID: "backup",
+		Profiles: []model.AgentProfile{
+			{
+				ID:   "default",
+				Name: "默认配置",
+				Settings: model.AgentSettings{
+					Type:         "hermes",
+					CliPath:      "hermes",
+					DefaultModel: "glm-5",
+					APIURL:       "https://example.test/v1",
+					APIToken:     "****",
+				},
+			},
+			{
+				ID:   "backup",
+				Name: "备用配置",
+				Settings: model.AgentSettings{
+					Type:         "mock",
+					CliPath:      "mock-agent",
+					DefaultModel: "mock-model",
+					APIURL:       "https://backup.example/v1",
+					APIToken:     "backup-token",
+				},
+			},
+		},
+	}
+	if err := svc.UpdateAgentProfiles(ctx, next); err != nil {
+		t.Fatalf("update agent profiles: %v", err)
+	}
+	if spec := svc.AgentSpec(); spec.Type != "mock" || spec.DefaultModel != "mock-model" || spec.APIToken != "backup-token" {
+		t.Fatalf("active profile spec = %+v", spec)
+	}
+	got := svc.GetAgentProfiles()
+	if got.Profiles[1].Settings.APIToken != "back****oken" {
+		t.Fatalf("backup token should be masked, got %+v", got.Profiles[1].Settings)
+	}
+
+	reloaded := NewService(store, config.AgentConfig{Type: "hermes", CliPath: "hermes"}, config.SessionConfig{}, zap.NewNop())
+	if spec := reloaded.AgentSpec(); spec.Type != "mock" || spec.DefaultModel != "mock-model" {
+		t.Fatalf("reloaded active profile spec = %+v", spec)
+	}
+}
+
 func TestPoolSettingsUpdateAndDefaults(t *testing.T) {
 	ctx := context.Background()
 	svc, store := newSettingsService(t)

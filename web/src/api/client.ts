@@ -1,7 +1,7 @@
 // 后端 API 客户端
 import axios from 'axios';
 import type {
-  AgentSettings,
+  AgentProfilesSettings,
   CandidateAsset,
   CandidateAssetStatus,
   KnowledgePublishTarget,
@@ -236,9 +236,9 @@ export const api = {
     http.get<{ tickets: Ticket[] | null }>('/tickets').then((r) => r.data.tickets ?? []),
 
   // 设置
-  getAgentSettings: () => http.get<AgentSettings>('/settings/agent').then((r) => r.data),
-  updateAgentSettings: (s: AgentSettings) =>
-    http.put<AgentSettings>('/settings/agent', s).then((r) => r.data),
+  getAgentSettings: () => http.get<AgentProfilesSettings>('/settings/agent').then((r) => r.data),
+  updateAgentSettings: (s: AgentProfilesSettings) =>
+    http.put<AgentProfilesSettings>('/settings/agent', s).then((r) => r.data),
   getPoolSettings: () => http.get<PoolSettings>('/settings/pool').then((r) => r.data),
   updatePoolSettings: (s: PoolSettings) =>
     http.put<PoolSettings>('/settings/pool', s).then((r) => r.data),

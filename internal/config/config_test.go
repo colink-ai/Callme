@@ -81,7 +81,8 @@ log:
 	if cfg.Session.MaxDuration != 2*time.Hour || cfg.Session.QueuePollSeconds != 5 {
 		t.Fatalf("session duration defaults not applied: %+v", cfg.Session)
 	}
-	if cfg.Feedback.DistillInterval != time.Hour || cfg.Feedback.AuditInterval != 10*time.Minute || cfg.Feedback.NotesMaxEntries != 200 {
+	if cfg.Feedback.DistillCron != "0 * * * *" || cfg.Feedback.AuditCron != "*/10 * * * *" ||
+		cfg.Feedback.DistillInterval != time.Hour || cfg.Feedback.AuditInterval != 10*time.Minute || cfg.Feedback.NotesMaxEntries != 200 {
 		t.Fatalf("feedback defaults not applied: %+v", cfg.Feedback)
 	}
 	if cfg.Log.MaxSize != 100 || cfg.Log.MaxBackups != 3 || cfg.Log.MaxAge != 7 {

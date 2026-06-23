@@ -30,6 +30,7 @@ import (
 	"callme/internal/service/agent"
 
 	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 )
 
@@ -118,21 +119,14 @@ func (s *Service) Submit(ctx context.Context, req SubmitRequest) (*model.Feedbac
 
 // distillLoop 定时蒸馏（单写者：避免并发写候选池冲突）
 func (s *Service) distillLoop() {
-	ticker := time.NewTicker(s.cfg.DistillInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.stop:
-			return
-		case <-ticker.C:
-			if err := s.distillOnce(context.Background()); err != nil {
-				s.logger.Error("feedback distill failed", zap.Error(err))
-			}
-			if err := s.aiLearnFromHistory(context.Background()); err != nil {
-				s.logger.Warn("AI learning job failed", zap.Error(err))
-			}
+	s.runScheduled("feedback distill", s.cfg.DistillCron, s.cfg.DistillInterval, func() {
+		if err := s.distillOnce(context.Background()); err != nil {
+			s.logger.Error("feedback distill failed", zap.Error(err))
 		}
-	}
+		if err := s.aiLearnFromHistory(context.Background()); err != nil {
+			s.logger.Warn("AI learning job failed", zap.Error(err))
+		}
+	})
 }
 
 func (s *Service) auditLoop() {
@@ -142,16 +136,55 @@ func (s *Service) auditLoop() {
 	if err := s.auditHermesLearning(context.Background()); err != nil {
 		s.logger.Warn("Hermes learning audit failed", zap.Error(err))
 	}
-	ticker := time.NewTicker(s.cfg.AuditInterval)
+	s.runScheduled("Hermes learning audit", s.cfg.AuditCron, s.cfg.AuditInterval, func() {
+		if err := s.auditHermesLearning(context.Background()); err != nil {
+			s.logger.Warn("Hermes learning audit failed", zap.Error(err))
+		}
+	})
+}
+
+func (s *Service) runScheduled(name string, cronExpr string, interval time.Duration, run func()) {
+	if strings.TrimSpace(cronExpr) != "" {
+		s.runCronScheduled(name, cronExpr, interval, run)
+		return
+	}
+	s.runIntervalScheduled(interval, run)
+}
+
+func (s *Service) runIntervalScheduled(interval time.Duration, run func()) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-s.stop:
 			return
 		case <-ticker.C:
-			if err := s.auditHermesLearning(context.Background()); err != nil {
-				s.logger.Warn("Hermes learning audit failed", zap.Error(err))
-			}
+			run()
+		}
+	}
+}
+
+func (s *Service) runCronScheduled(name string, cronExpr string, fallbackInterval time.Duration, run func()) {
+	schedule, err := cron.ParseStandard(cronExpr)
+	if err != nil {
+		s.logger.Warn("invalid cron schedule, fallback to interval",
+			zap.String("task", name),
+			zap.String("cron", cronExpr),
+			zap.Duration("fallbackInterval", fallbackInterval),
+			zap.Error(err),
+		)
+		s.runIntervalScheduled(fallbackInterval, run)
+		return
+	}
+	for {
+		next := schedule.Next(time.Now())
+		timer := time.NewTimer(time.Until(next))
+		select {
+		case <-s.stop:
+			timer.Stop()
+			return
+		case <-timer.C:
+			run()
 		}
 	}
 }

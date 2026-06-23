@@ -358,6 +358,13 @@ func TestSessionSettingsStatsAndWSRoutes(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("get agent settings status=%d body=%s", rr.Code, rr.Body.String())
 	}
+	var agentProfiles model.AgentProfilesSettings
+	if err := json.Unmarshal(rr.Body.Bytes(), &agentProfiles); err != nil {
+		t.Fatalf("decode agent profiles: %v", err)
+	}
+	if agentProfiles.ActiveProfileID == "" || len(agentProfiles.Profiles) == 0 {
+		t.Fatalf("invalid agent profiles response: %+v", agentProfiles)
+	}
 	rr = h.do(http.MethodPut, "/api/v1/settings/pool", adminToken, string(model.UserRoleAdmin), map[string]any{
 		"maxActive": 3,
 		"maxQueue":  7,
@@ -577,6 +584,9 @@ func TestKnowledgeFeedbackHandoffAndUserRoutes(t *testing.T) {
 	})
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "updated-model") {
 		t.Fatalf("update agent settings status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"profiles"`) || !strings.Contains(rr.Body.String(), `"activeProfileId"`) {
+		t.Fatalf("update agent settings should return profiles, body=%s", rr.Body.String())
 	}
 
 	rr = h.do(http.MethodDelete, "/api/v1/users/"+admin.ID, adminToken, string(model.UserRoleAdmin), nil)

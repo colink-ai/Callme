@@ -73,6 +73,8 @@ type SessionConfig struct {
 
 // FeedbackConfig 自学习蒸馏配置
 type FeedbackConfig struct {
+	DistillCron     string        `yaml:"distill_cron"`      // 自学习/历史会话挖掘 cron 表达式
+	AuditCron       string        `yaml:"audit_cron"`        // Hermes 自学习审计 cron 表达式
 	DistillInterval time.Duration `yaml:"distill_interval"`  // 蒸馏任务周期
 	AuditInterval   time.Duration `yaml:"audit_interval"`    // Hermes 自学习审计周期
 	NotesMaxEntries int           `yaml:"notes_max_entries"` // 兼容旧配置；正式知识现由审批流发布
@@ -120,6 +122,8 @@ func defaultConfig() *Config {
 			TokenTTL: 7 * 24 * time.Hour,
 		},
 		Feedback: FeedbackConfig{
+			DistillCron:     "0 * * * *",
+			AuditCron:       "*/10 * * * *",
 			DistillInterval: time.Hour,
 			AuditInterval:   10 * time.Minute,
 			NotesMaxEntries: 200,

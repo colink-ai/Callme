@@ -384,6 +384,20 @@ type AgentSettings struct {
 	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
+// AgentProfile 一套可快速切换的 Agent / 模型配置。
+type AgentProfile struct {
+	ID       string        `json:"id"`
+	Name     string        `json:"name"`
+	Settings AgentSettings `json:"settings"`
+}
+
+// AgentProfilesSettings Agent 多配置档案。
+type AgentProfilesSettings struct {
+	ActiveProfileID string         `json:"activeProfileId"`
+	Profiles        []AgentProfile `json:"profiles"`
+	UpdatedAt       time.Time      `json:"updatedAt"`
+}
+
 // PoolSettings 坐席池运行时设置（持久化在 DB）
 type PoolSettings struct {
 	MaxActive int       `json:"maxActive"`

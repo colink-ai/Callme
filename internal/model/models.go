@@ -305,51 +305,75 @@ type CandidateAsset struct {
 	UpdatedAt        time.Time                `json:"updatedAt"`
 }
 
-// HermesLearningAssetType Hermes 自学习资产类型
-type HermesLearningAssetType string
+// RuntimeLearningAssetType Agent Runtime 自学习资产类型。
+type RuntimeLearningAssetType string
 
 const (
-	HermesLearningAssetSkill  HermesLearningAssetType = "skill"
-	HermesLearningAssetMemory HermesLearningAssetType = "memory"
+	RuntimeLearningAssetSkill  RuntimeLearningAssetType = "skill"
+	RuntimeLearningAssetMemory RuntimeLearningAssetType = "memory"
 )
 
-// HermesLearningChangeType Hermes 自学习资产变更类型
-type HermesLearningChangeType string
+// RuntimeLearningChangeType Agent Runtime 自学习资产变更类型。
+type RuntimeLearningChangeType string
 
 const (
-	HermesLearningChangeNew      HermesLearningChangeType = "new"
-	HermesLearningChangeModified HermesLearningChangeType = "modified"
-	HermesLearningChangeDeleted  HermesLearningChangeType = "deleted"
+	RuntimeLearningChangeNew      RuntimeLearningChangeType = "new"
+	RuntimeLearningChangeModified RuntimeLearningChangeType = "modified"
+	RuntimeLearningChangeDeleted  RuntimeLearningChangeType = "deleted"
 )
 
-// HermesLearningStatus Hermes 自学习审计状态
-type HermesLearningStatus string
+// RuntimeLearningStatus Agent Runtime 自学习审计状态。
+type RuntimeLearningStatus string
 
 const (
-	HermesLearningStatusPendingReview        HermesLearningStatus = "pending_review"
-	HermesLearningStatusKept                 HermesLearningStatus = "kept"
-	HermesLearningStatusModified             HermesLearningStatus = "modified"
-	HermesLearningStatusDeleted              HermesLearningStatus = "deleted"
-	HermesLearningStatusConverted            HermesLearningStatus = "converted"
-	HermesLearningStatusProhibitedAsEvidence HermesLearningStatus = "prohibited_as_evidence"
+	RuntimeLearningStatusPendingReview        RuntimeLearningStatus = "pending_review"
+	RuntimeLearningStatusKept                 RuntimeLearningStatus = "kept"
+	RuntimeLearningStatusModified             RuntimeLearningStatus = "modified"
+	RuntimeLearningStatusDeleted              RuntimeLearningStatus = "deleted"
+	RuntimeLearningStatusConverted            RuntimeLearningStatus = "converted"
+	RuntimeLearningStatusProhibitedAsEvidence RuntimeLearningStatus = "prohibited_as_evidence"
 )
 
-// HermesLearningAsset Hermes 自学习审计记录。
-// 记录 Hermes 在 skills / memories 中新增、修改、删除的资产，供管理员审计。
-type HermesLearningAsset struct {
-	ID          string                   `json:"id"`
-	AssetType   HermesLearningAssetType  `json:"assetType"`
-	Path        string                   `json:"path"`
-	ContentHash string                   `json:"contentHash"`
-	Content     string                   `json:"content,omitempty"`
-	ChangeType  HermesLearningChangeType `json:"changeType"`
-	RiskFlags   string                   `json:"riskFlags,omitempty"` // JSON array
-	Status      HermesLearningStatus     `json:"status"`
-	Reviewer    string                   `json:"reviewer,omitempty"`
-	ReviewNote  string                   `json:"reviewNote,omitempty"`
-	CreatedAt   time.Time                `json:"createdAt"`
-	UpdatedAt   time.Time                `json:"updatedAt"`
+// RuntimeLearningAsset Agent Runtime 自学习审计记录。
+// 记录具体 Agent Runtime 在自身资产目录中新增、修改、删除的文件，供人工审计。
+type RuntimeLearningAsset struct {
+	ID          string                    `json:"id"`
+	AgentType   string                    `json:"agentType"`
+	AssetType   RuntimeLearningAssetType  `json:"assetType"`
+	Path        string                    `json:"path"`
+	ContentHash string                    `json:"contentHash"`
+	Content     string                    `json:"content,omitempty"`
+	ChangeType  RuntimeLearningChangeType `json:"changeType"`
+	RiskFlags   string                    `json:"riskFlags,omitempty"` // JSON array
+	Status      RuntimeLearningStatus     `json:"status"`
+	Reviewer    string                    `json:"reviewer,omitempty"`
+	ReviewNote  string                    `json:"reviewNote,omitempty"`
+	CreatedAt   time.Time                 `json:"createdAt"`
+	UpdatedAt   time.Time                 `json:"updatedAt"`
 }
+
+// Backward-compatible aliases. The storage table is still hermes_learning_assets
+// until a later migration can rename it safely.
+type HermesLearningAssetType = RuntimeLearningAssetType
+type HermesLearningChangeType = RuntimeLearningChangeType
+type HermesLearningStatus = RuntimeLearningStatus
+type HermesLearningAsset = RuntimeLearningAsset
+
+const (
+	HermesLearningAssetSkill  = RuntimeLearningAssetSkill
+	HermesLearningAssetMemory = RuntimeLearningAssetMemory
+
+	HermesLearningChangeNew      = RuntimeLearningChangeNew
+	HermesLearningChangeModified = RuntimeLearningChangeModified
+	HermesLearningChangeDeleted  = RuntimeLearningChangeDeleted
+
+	HermesLearningStatusPendingReview        = RuntimeLearningStatusPendingReview
+	HermesLearningStatusKept                 = RuntimeLearningStatusKept
+	HermesLearningStatusModified             = RuntimeLearningStatusModified
+	HermesLearningStatusDeleted              = RuntimeLearningStatusDeleted
+	HermesLearningStatusConverted            = RuntimeLearningStatusConverted
+	HermesLearningStatusProhibitedAsEvidence = RuntimeLearningStatusProhibitedAsEvidence
+)
 
 // LearningJobStatus AI 学习任务状态
 type LearningJobStatus string

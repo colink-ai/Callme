@@ -800,9 +800,12 @@ func decodePublishTargets(raw string) []model.KnowledgePublishTarget {
 	return model.NormalizeKnowledgePublishTargets(targets)
 }
 
-// ---------- hermes_learning_assets（Hermes 自学习审计轨） ----------
+// ---------- runtime learning assets（Agent Runtime 自学习审计轨） ----------
+//
+// 兼容说明：底层表仍沿用 hermes_learning_assets，避免破坏既有部署；
+// 对外领域模型已经切换为 RuntimeLearningAsset。
 
-func (s *Store) CreateHermesLearningAsset(ctx context.Context, a *model.HermesLearningAsset) error {
+func (s *Store) CreateRuntimeLearningAsset(ctx context.Context, a *model.RuntimeLearningAsset) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO hermes_learning_assets
 		 (id, asset_type, path, content_hash, content, change_type, risk_flags, status, reviewer, review_note, created_at, updated_at)
@@ -812,26 +815,26 @@ func (s *Store) CreateHermesLearningAsset(ctx context.Context, a *model.HermesLe
 	return err
 }
 
-func (s *Store) LatestHermesLearningAssetByPath(ctx context.Context, path string) (*model.HermesLearningAsset, error) {
+func (s *Store) LatestRuntimeLearningAssetByPath(ctx context.Context, path string) (*model.RuntimeLearningAsset, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, asset_type, path, content_hash, content, change_type, risk_flags, status, reviewer, review_note, created_at, updated_at
 		 FROM hermes_learning_assets WHERE path=? ORDER BY created_at DESC LIMIT 1`, path)
-	return scanHermesLearningAsset(row)
+	return scanRuntimeLearningAsset(row)
 }
 
-func (s *Store) GetHermesLearningAsset(ctx context.Context, id string) (*model.HermesLearningAsset, error) {
+func (s *Store) GetRuntimeLearningAsset(ctx context.Context, id string) (*model.RuntimeLearningAsset, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, asset_type, path, content_hash, content, change_type, risk_flags, status, reviewer, review_note, created_at, updated_at
 		 FROM hermes_learning_assets WHERE id=?`, id)
-	a, err := scanHermesLearningAsset(row)
+	a, err := scanRuntimeLearningAsset(row)
 	if err != nil {
 		return nil, err
 	}
-	hydrateHermesLearningContent(a)
+	hydrateRuntimeLearningContent(a)
 	return a, nil
 }
 
-func (s *Store) ListLatestHermesLearningAssets(ctx context.Context) (map[string]*model.HermesLearningAsset, error) {
+func (s *Store) ListLatestRuntimeLearningAssets(ctx context.Context) (map[string]*model.RuntimeLearningAsset, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT h.id, h.asset_type, h.path, h.content_hash, h.content, h.change_type, h.risk_flags, h.status, h.reviewer, h.review_note, h.created_at, h.updated_at
 		 FROM hermes_learning_assets h
@@ -845,9 +848,9 @@ func (s *Store) ListLatestHermesLearningAssets(ctx context.Context) (map[string]
 	}
 	defer rows.Close()
 
-	result := map[string]*model.HermesLearningAsset{}
+	result := map[string]*model.RuntimeLearningAsset{}
 	for rows.Next() {
-		a, err := scanHermesLearningAsset(rows)
+		a, err := scanRuntimeLearningAsset(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -856,7 +859,7 @@ func (s *Store) ListLatestHermesLearningAssets(ctx context.Context) (map[string]
 	return result, rows.Err()
 }
 
-func (s *Store) ListHermesLearningAssets(ctx context.Context, status model.HermesLearningStatus, limit int) ([]*model.HermesLearningAsset, error) {
+func (s *Store) ListRuntimeLearningAssets(ctx context.Context, status model.RuntimeLearningStatus, limit int) ([]*model.RuntimeLearningAsset, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -880,10 +883,10 @@ func (s *Store) ListHermesLearningAssets(ctx context.Context, status model.Herme
 	}
 	defer rows.Close()
 
-	var result []*model.HermesLearningAsset
+	var result []*model.RuntimeLearningAsset
 	seen := map[string]struct{}{}
 	for rows.Next() {
-		a, err := scanHermesLearningAsset(rows)
+		a, err := scanRuntimeLearningAsset(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -895,7 +898,7 @@ func (s *Store) ListHermesLearningAssets(ctx context.Context, status model.Herme
 			continue
 		}
 		seen[key] = struct{}{}
-		hydrateHermesLearningContent(a)
+		hydrateRuntimeLearningContent(a)
 		result = append(result, a)
 		if len(result) >= limit {
 			break
@@ -904,7 +907,7 @@ func (s *Store) ListHermesLearningAssets(ctx context.Context, status model.Herme
 	return result, rows.Err()
 }
 
-func (s *Store) UpdateHermesLearningAssetReview(ctx context.Context, id string, status model.HermesLearningStatus, reviewer, note string) error {
+func (s *Store) UpdateRuntimeLearningAssetReview(ctx context.Context, id string, status model.RuntimeLearningStatus, reviewer, note string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE hermes_learning_assets
 		 SET status=?, reviewer=?, review_note=?, updated_at=?
@@ -913,7 +916,7 @@ func (s *Store) UpdateHermesLearningAssetReview(ctx context.Context, id string, 
 	return err
 }
 
-func (s *Store) UpdateHermesLearningAssetReviewWithHash(ctx context.Context, id string, status model.HermesLearningStatus, contentHash, reviewer, note string) error {
+func (s *Store) UpdateRuntimeLearningAssetReviewWithHash(ctx context.Context, id string, status model.RuntimeLearningStatus, contentHash, reviewer, note string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE hermes_learning_assets
 		 SET status=?, content_hash=?, reviewer=?, review_note=?, updated_at=?
@@ -922,8 +925,8 @@ func (s *Store) UpdateHermesLearningAssetReviewWithHash(ctx context.Context, id 
 	return err
 }
 
-func hydrateHermesLearningContent(a *model.HermesLearningAsset) {
-	if a == nil || a.Path == "" || a.ChangeType == model.HermesLearningChangeDeleted {
+func hydrateRuntimeLearningContent(a *model.RuntimeLearningAsset) {
+	if a == nil || a.Path == "" || a.ChangeType == model.RuntimeLearningChangeDeleted {
 		return
 	}
 	data, err := os.ReadFile(a.Path)
@@ -933,17 +936,46 @@ func hydrateHermesLearningContent(a *model.HermesLearningAsset) {
 	a.Content = string(data)
 }
 
-func scanHermesLearningAsset(r rowScanner) (*model.HermesLearningAsset, error) {
-	var a model.HermesLearningAsset
+func scanRuntimeLearningAsset(r rowScanner) (*model.RuntimeLearningAsset, error) {
+	var a model.RuntimeLearningAsset
 	var content, riskFlags, reviewNote sql.NullString
 	if err := r.Scan(&a.ID, &a.AssetType, &a.Path, &a.ContentHash, &content, &a.ChangeType, &riskFlags,
 		&a.Status, &a.Reviewer, &reviewNote, &a.CreatedAt, &a.UpdatedAt); err != nil {
 		return nil, err
 	}
+	a.AgentType = "hermes"
 	a.Content = content.String
 	a.RiskFlags = riskFlags.String
 	a.ReviewNote = reviewNote.String
 	return &a, nil
+}
+
+func (s *Store) CreateHermesLearningAsset(ctx context.Context, a *model.HermesLearningAsset) error {
+	return s.CreateRuntimeLearningAsset(ctx, a)
+}
+
+func (s *Store) LatestHermesLearningAssetByPath(ctx context.Context, path string) (*model.HermesLearningAsset, error) {
+	return s.LatestRuntimeLearningAssetByPath(ctx, path)
+}
+
+func (s *Store) GetHermesLearningAsset(ctx context.Context, id string) (*model.HermesLearningAsset, error) {
+	return s.GetRuntimeLearningAsset(ctx, id)
+}
+
+func (s *Store) ListLatestHermesLearningAssets(ctx context.Context) (map[string]*model.HermesLearningAsset, error) {
+	return s.ListLatestRuntimeLearningAssets(ctx)
+}
+
+func (s *Store) ListHermesLearningAssets(ctx context.Context, status model.HermesLearningStatus, limit int) ([]*model.HermesLearningAsset, error) {
+	return s.ListRuntimeLearningAssets(ctx, status, limit)
+}
+
+func (s *Store) UpdateHermesLearningAssetReview(ctx context.Context, id string, status model.HermesLearningStatus, reviewer, note string) error {
+	return s.UpdateRuntimeLearningAssetReview(ctx, id, status, reviewer, note)
+}
+
+func (s *Store) UpdateHermesLearningAssetReviewWithHash(ctx context.Context, id string, status model.HermesLearningStatus, contentHash, reviewer, note string) error {
+	return s.UpdateRuntimeLearningAssetReviewWithHash(ctx, id, status, contentHash, reviewer, note)
 }
 
 // ---------- learning_jobs（AI 学习任务历史） ----------

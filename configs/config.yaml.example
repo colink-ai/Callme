@@ -10,7 +10,7 @@ database:
   dsn: data/callme.db
 
 agent:
-  hermes_home: data/hermes-home # Hermes 持久化目录：配置、记忆、审批后的正式知识 approved_knowledge.md
+  hermes_home: data/hermes-home # 兼容字段：当前 Runtime 工作目录；Hermes 使用 HERMES_HOME
   work_dir: data/workdir        # 会话工作目录根
   prompt_timeout: 30m           # ACP 单轮回答最长等待时间；内网慢模型可调大，负数表示不主动超时
 
@@ -27,7 +27,7 @@ feedback:
   # 标准 5 段 cron 表达式：分 时 日 月 周
   # 自学习/历史会话 AI 挖掘：默认每小时第 0 分钟执行
   distill_cron: "0 * * * *"
-  # Hermes skills/memories 自学习审计扫描：默认每 10 分钟执行
+  # Agent Runtime 自学习审计扫描：默认每 10 分钟执行
   audit_cron: "*/10 * * * *"
   # 兼容旧配置：未配置 cron 时才按 interval 轮询
   distill_interval: 1h

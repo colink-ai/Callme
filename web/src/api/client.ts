@@ -7,8 +7,8 @@ import type {
   KnowledgePublishTarget,
   DailyPoint,
   HotQuestion,
-  HermesLearningAsset,
-  HermesLearningStatus,
+  RuntimeLearningAsset,
+  RuntimeLearningStatus,
   LearningJob,
   LoginResult,
   Message,
@@ -169,30 +169,30 @@ export const api = {
       }
     }
   },
-  listHermesLearningAssets: (status?: HermesLearningStatus) =>
+  listRuntimeLearningAssets: (status?: RuntimeLearningStatus) =>
     http
-      .get<{ assets: HermesLearningAsset[] | null }>('/learning/hermes-assets', {
+      .get<{ assets: RuntimeLearningAsset[] | null }>('/learning/runtime-assets', {
         params: status ? { status } : {},
       })
       .then((r) => r.data.assets ?? []),
-  reviewHermesLearningAsset: (
+  reviewRuntimeLearningAsset: (
     id: string,
     action: 'keep' | 'delete' | 'modify',
     note?: string,
     content?: string,
   ) =>
-    http.post<HermesLearningAsset>(`/learning/hermes-assets/${id}/review`, { action, note, content }).then((r) => r.data),
-  assistHermesLearningEdit: (id: string, instruction: string, content: string) =>
+    http.post<RuntimeLearningAsset>(`/learning/runtime-assets/${id}/review`, { action, note, content }).then((r) => r.data),
+  assistRuntimeLearningEdit: (id: string, instruction: string, content: string) =>
     http
-      .post<{ content: string }>(`/learning/hermes-assets/${id}/assist-edit`, { instruction, content }, { timeout: 90000 })
+      .post<{ content: string }>(`/learning/runtime-assets/${id}/assist-edit`, { instruction, content }, { timeout: 90000 })
       .then((r) => r.data.content),
-  streamHermesLearningEdit: async (
+  streamRuntimeLearningEdit: async (
     id: string,
     instruction: string,
     content: string,
     onEvent: (event: { type: string; delta?: string; content?: string; error?: string }) => void,
   ) => {
-    const resp = await fetch(`/api/v1/learning/hermes-assets/${id}/assist-edit/stream`, {
+    const resp = await fetch(`/api/v1/learning/runtime-assets/${id}/assist-edit/stream`, {
       method: 'POST',
       headers: {
         ...authHeaders(),
@@ -225,6 +225,21 @@ export const api = {
       }
     }
   },
+  listHermesLearningAssets: (status?: RuntimeLearningStatus) => api.listRuntimeLearningAssets(status),
+  reviewHermesLearningAsset: (
+    id: string,
+    action: 'keep' | 'delete' | 'modify',
+    note?: string,
+    content?: string,
+  ) => api.reviewRuntimeLearningAsset(id, action, note, content),
+  assistHermesLearningEdit: (id: string, instruction: string, content: string) =>
+    api.assistRuntimeLearningEdit(id, instruction, content),
+  streamHermesLearningEdit: (
+    id: string,
+    instruction: string,
+    content: string,
+    onEvent: (event: { type: string; delta?: string; content?: string; error?: string }) => void,
+  ) => api.streamRuntimeLearningEdit(id, instruction, content, onEvent),
   listLearningJobs: () =>
     http.get<{ jobs: LearningJob[] | null }>('/learning/jobs').then((r) => r.data.jobs ?? []),
   runLearningJob: () => http.post<{ job: LearningJob }>('/learning/jobs/run').then((r) => r.data.job),

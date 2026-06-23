@@ -324,7 +324,7 @@ export default function SettingsPage() {
             <Form.Item
               label="客服系统提示词"
               name="systemPrompt"
-              tooltip="建议加入自学习约束：单次会话结论不得泛化为全局规则；业务事实须走候选资产、经人工审批后才生效；可参考 HERMES_HOME/approved_knowledge.md 中已审批的正式知识。"
+              tooltip="建议加入自学习约束：单次会话结论不得泛化为全局规则；业务事实须走候选资产、经人工审批后才生效；可参考 Runtime 工作目录中的 approved_knowledge.md。"
             >
               <Input.TextArea rows={6} placeholder="定义客服角色、知识检索策略、转人工规则；并约束：业务事实须经审批沉淀、单次会话结论不得泛化…" />
             </Form.Item>
@@ -360,7 +360,7 @@ export default function SettingsPage() {
             label="坐席数（最大并发会话）"
             name="maxActive"
             rules={[{ required: true }]}
-            tooltip="同时服务的会话上限，等于并发 Hermes 进程数；超出进入排队"
+            tooltip="同时服务的会话上限，等于并发 Agent 会话数；超出进入排队"
           >
             <InputNumber min={1} max={100} />
           </Form.Item>

@@ -78,10 +78,14 @@ func NewRouter(d *Deps) *gin.Engine {
 		protected.PUT("/learning/candidates/:id", d.knowledgeContributorRequired(), d.updateCandidate)
 		protected.GET("/learning/jobs", d.knowledgeContributorRequired(), d.listLearningJobs)
 		protected.POST("/learning/jobs/run", d.knowledgeContributorRequired(), d.runLearningJob)
-		protected.GET("/learning/hermes-assets", d.knowledgeReviewerRequired(), d.listHermesLearningAssets)
-		protected.POST("/learning/hermes-assets/:id/review", d.knowledgeReviewerRequired(), d.reviewHermesLearningAsset)
-		protected.POST("/learning/hermes-assets/:id/assist-edit", d.knowledgeReviewerRequired(), d.assistHermesLearningEdit)
-		protected.POST("/learning/hermes-assets/:id/assist-edit/stream", d.knowledgeReviewerRequired(), d.assistHermesLearningEditStream)
+		protected.GET("/learning/runtime-assets", d.knowledgeReviewerRequired(), d.listRuntimeLearningAssets)
+		protected.POST("/learning/runtime-assets/:id/review", d.knowledgeReviewerRequired(), d.reviewRuntimeLearningAsset)
+		protected.POST("/learning/runtime-assets/:id/assist-edit", d.knowledgeReviewerRequired(), d.assistRuntimeLearningEdit)
+		protected.POST("/learning/runtime-assets/:id/assist-edit/stream", d.knowledgeReviewerRequired(), d.assistRuntimeLearningEditStream)
+		protected.GET("/learning/hermes-assets", d.knowledgeReviewerRequired(), d.listRuntimeLearningAssets)
+		protected.POST("/learning/hermes-assets/:id/review", d.knowledgeReviewerRequired(), d.reviewRuntimeLearningAsset)
+		protected.POST("/learning/hermes-assets/:id/assist-edit", d.knowledgeReviewerRequired(), d.assistRuntimeLearningEdit)
+		protected.POST("/learning/hermes-assets/:id/assist-edit/stream", d.knowledgeReviewerRequired(), d.assistRuntimeLearningEditStream)
 		protected.POST("/learning/candidates/:id/review", d.knowledgeReviewerRequired(), d.reviewCandidate)
 
 		// 转人工/工单
@@ -589,9 +593,9 @@ func (d *Deps) listCandidates(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"candidates": items})
 }
 
-func (d *Deps) listHermesLearningAssets(c *gin.Context) {
-	status := model.HermesLearningStatus(c.Query("status"))
-	items, err := d.Feedback.ListHermesLearningAssets(c.Request.Context(), status)
+func (d *Deps) listRuntimeLearningAssets(c *gin.Context) {
+	status := model.RuntimeLearningStatus(c.Query("status"))
+	items, err := d.Feedback.ListRuntimeLearningAssets(c.Request.Context(), status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -599,13 +603,13 @@ func (d *Deps) listHermesLearningAssets(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"assets": items})
 }
 
-func (d *Deps) reviewHermesLearningAsset(c *gin.Context) {
-	var req feedback.ReviewHermesLearningRequest
+func (d *Deps) reviewRuntimeLearningAsset(c *gin.Context) {
+	var req feedback.ReviewRuntimeLearningRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	asset, err := d.Feedback.ReviewHermesLearningAsset(c.Request.Context(), c.Param("id"), req, currentUser(c).Username)
+	asset, err := d.Feedback.ReviewRuntimeLearningAsset(c.Request.Context(), c.Param("id"), req, currentUser(c).Username)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -613,13 +617,13 @@ func (d *Deps) reviewHermesLearningAsset(c *gin.Context) {
 	c.JSON(http.StatusOK, asset)
 }
 
-func (d *Deps) assistHermesLearningEdit(c *gin.Context) {
-	var req feedback.AssistHermesLearningEditRequest
+func (d *Deps) assistRuntimeLearningEdit(c *gin.Context) {
+	var req feedback.AssistRuntimeLearningEditRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	content, err := d.Feedback.AssistHermesLearningEdit(c.Request.Context(), c.Param("id"), req)
+	content, err := d.Feedback.AssistRuntimeLearningEdit(c.Request.Context(), c.Param("id"), req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -627,8 +631,8 @@ func (d *Deps) assistHermesLearningEdit(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"content": content})
 }
 
-func (d *Deps) assistHermesLearningEditStream(c *gin.Context) {
-	var req feedback.AssistHermesLearningEditRequest
+func (d *Deps) assistRuntimeLearningEditStream(c *gin.Context) {
+	var req feedback.AssistRuntimeLearningEditRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
@@ -654,7 +658,7 @@ func (d *Deps) assistHermesLearningEditStream(c *gin.Context) {
 		flusher.Flush()
 		return nil
 	}
-	if err := d.Feedback.AssistHermesLearningEditStream(c.Request.Context(), c.Param("id"), req, writeEvent); err != nil {
+	if err := d.Feedback.AssistRuntimeLearningEditStream(c.Request.Context(), c.Param("id"), req, writeEvent); err != nil {
 		_ = writeEvent(feedback.ManualDraftStreamEvent{Type: "error", Error: err.Error()})
 	}
 }

@@ -156,9 +156,9 @@ export interface CandidateAsset {
   updatedAt: string;
 }
 
-export type HermesLearningAssetType = 'skill' | 'memory';
-export type HermesLearningChangeType = 'new' | 'modified' | 'deleted';
-export type HermesLearningStatus =
+export type RuntimeLearningAssetType = 'skill' | 'memory';
+export type RuntimeLearningChangeType = 'new' | 'modified' | 'deleted';
+export type RuntimeLearningStatus =
   | 'pending_review'
   | 'kept'
   | 'modified'
@@ -166,20 +166,26 @@ export type HermesLearningStatus =
   | 'converted'
   | 'prohibited_as_evidence';
 
-export interface HermesLearningAsset {
+export interface RuntimeLearningAsset {
   id: string;
-  assetType: HermesLearningAssetType;
+  agentType: string;
+  assetType: RuntimeLearningAssetType;
   path: string;
   contentHash: string;
   content?: string;
-  changeType: HermesLearningChangeType;
+  changeType: RuntimeLearningChangeType;
   riskFlags?: string;
-  status: HermesLearningStatus;
+  status: RuntimeLearningStatus;
   reviewer?: string;
   reviewNote?: string;
   createdAt: string;
   updatedAt: string;
 }
+
+export type HermesLearningAssetType = RuntimeLearningAssetType;
+export type HermesLearningChangeType = RuntimeLearningChangeType;
+export type HermesLearningStatus = RuntimeLearningStatus;
+export type HermesLearningAsset = RuntimeLearningAsset;
 
 export type LearningJobStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
 

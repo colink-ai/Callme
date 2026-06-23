@@ -54,7 +54,7 @@ type AgentConfig struct {
 	DefaultModel  string        `yaml:"default_model"`  // 兼容旧配置；新部署请在设置页配置
 	APIURL        string        `yaml:"api_url"`        // 兼容旧配置；新部署请在设置页配置
 	APIToken      string        `yaml:"api_token"`      // 兼容旧配置；新部署请在设置页配置
-	HermesHome    string        `yaml:"hermes_home"`    // Callme 管理的 HERMES_HOME（正式知识 + Hermes 自学习审计）
+	HermesHome    string        `yaml:"hermes_home"`    // 兼容字段：当前 Runtime 工作目录（Hermes 使用 HERMES_HOME）
 	WorkDir       string        `yaml:"work_dir"`       // 会话工作目录根
 	SystemPrompt  string        `yaml:"system_prompt"`  // 兼容旧配置；新部署请在设置页配置
 	PromptTimeout time.Duration `yaml:"prompt_timeout"` // ACP 单轮回答最长等待时间；负数表示不主动超时
@@ -74,9 +74,9 @@ type SessionConfig struct {
 // FeedbackConfig 自学习蒸馏配置
 type FeedbackConfig struct {
 	DistillCron     string        `yaml:"distill_cron"`      // 自学习/历史会话挖掘 cron 表达式
-	AuditCron       string        `yaml:"audit_cron"`        // Hermes 自学习审计 cron 表达式
+	AuditCron       string        `yaml:"audit_cron"`        // Agent Runtime 自学习审计 cron 表达式
 	DistillInterval time.Duration `yaml:"distill_interval"`  // 蒸馏任务周期
-	AuditInterval   time.Duration `yaml:"audit_interval"`    // Hermes 自学习审计周期
+	AuditInterval   time.Duration `yaml:"audit_interval"`    // Agent Runtime 自学习审计周期
 	NotesMaxEntries int           `yaml:"notes_max_entries"` // 兼容旧配置；正式知识现由审批流发布
 }
 

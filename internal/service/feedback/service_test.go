@@ -34,7 +34,7 @@ func newTestService(t *testing.T) (*Service, *repo.Store, string) {
 	store := repo.NewStore(db)
 	home := filepath.Join(dir, "home")
 	// 用很长的蒸馏间隔，避免后台 loop 干扰，手动调用 distillOnce
-	s := &Service{store: store, cfg: config.FeedbackConfig{DistillInterval: time.Hour, AuditInterval: time.Hour, NotesMaxEntries: 100}, hermesHome: home, logger: zap.NewNop()}
+	s := &Service{store: store, cfg: config.FeedbackConfig{DistillInterval: time.Hour, AuditInterval: time.Hour, NotesMaxEntries: 100}, runtimeHome: home, logger: zap.NewNop()}
 	return s, store, home
 }
 

@@ -34,22 +34,22 @@ import (
 	"go.uber.org/zap"
 )
 
-// ApprovedFileName 正式知识文件名（位于 HERMES_HOME 下，生产 Agent 只读此文件）
+// ApprovedFileName 正式知识文件名（位于当前 Agent Runtime 工作目录下）
 const ApprovedFileName = "approved_knowledge.md"
 
 // Service 反馈与自学习沙箱服务
 type Service struct {
-	store      *repo.Store
-	cfg        config.FeedbackConfig
-	hermesHome string
-	agentSpec  func() agent.AgentSpec
-	logger     *zap.Logger
-	stop       chan struct{}
+	store       *repo.Store
+	cfg         config.FeedbackConfig
+	runtimeHome string
+	agentSpec   func() agent.AgentSpec
+	logger      *zap.Logger
+	stop        chan struct{}
 }
 
 // NewService 创建服务并启动蒸馏任务
-func NewService(store *repo.Store, cfg config.FeedbackConfig, hermesHome string, agentSpec func() agent.AgentSpec, logger *zap.Logger) *Service {
-	s := &Service{store: store, cfg: cfg, hermesHome: hermesHome, agentSpec: agentSpec, logger: logger, stop: make(chan struct{})}
+func NewService(store *repo.Store, cfg config.FeedbackConfig, runtimeHome string, agentSpec func() agent.AgentSpec, logger *zap.Logger) *Service {
+	s := &Service{store: store, cfg: cfg, runtimeHome: runtimeHome, agentSpec: agentSpec, logger: logger, stop: make(chan struct{})}
 	go s.distillLoop()
 	go s.auditLoop()
 	return s
@@ -73,18 +73,21 @@ type ManualDraftRequest struct {
 	Images         []model.ImageContent           `json:"images,omitempty"`
 }
 
-// ReviewHermesLearningRequest 处理 Hermes 自学习审计记录。
-type ReviewHermesLearningRequest struct {
+// ReviewRuntimeLearningRequest 处理 Agent Runtime 自学习审计记录。
+type ReviewRuntimeLearningRequest struct {
 	Action  string `json:"action"`
 	Note    string `json:"note"`
 	Content string `json:"content"`
 }
 
-// AssistHermesLearningEditRequest 用 AI 辅助修改 Hermes 自学习内容。
-type AssistHermesLearningEditRequest struct {
+// AssistRuntimeLearningEditRequest 用 AI 辅助修改 Agent Runtime 自学习内容。
+type AssistRuntimeLearningEditRequest struct {
 	Instruction string `json:"instruction"`
 	Content     string `json:"content"`
 }
+
+type ReviewHermesLearningRequest = ReviewRuntimeLearningRequest
+type AssistHermesLearningEditRequest = AssistRuntimeLearningEditRequest
 
 // ManualDraftStreamEvent 人工录入知识流式生成事件。
 type ManualDraftStreamEvent struct {
@@ -130,15 +133,15 @@ func (s *Service) distillLoop() {
 }
 
 func (s *Service) auditLoop() {
-	if s.hermesHome == "" {
+	if s.runtimeHome == "" {
 		return
 	}
-	if err := s.auditHermesLearning(context.Background()); err != nil {
-		s.logger.Warn("Hermes learning audit failed", zap.Error(err))
+	if err := s.auditRuntimeLearning(context.Background()); err != nil {
+		s.logger.Warn("runtime learning audit failed", zap.Error(err))
 	}
-	s.runScheduled("Hermes learning audit", s.cfg.AuditCron, s.cfg.AuditInterval, func() {
-		if err := s.auditHermesLearning(context.Background()); err != nil {
-			s.logger.Warn("Hermes learning audit failed", zap.Error(err))
+	s.runScheduled("runtime learning audit", s.cfg.AuditCron, s.cfg.AuditInterval, func() {
+		if err := s.auditRuntimeLearning(context.Background()); err != nil {
+			s.logger.Warn("runtime learning audit failed", zap.Error(err))
 		}
 	})
 }
@@ -189,14 +192,18 @@ func (s *Service) runCronScheduled(name string, cronExpr string, fallbackInterva
 	}
 }
 
-// auditHermesLearning 扫描 Hermes 自学习资产（skills / memories）并记录 diff。
+// auditRuntimeLearning 扫描当前 Agent Runtime 自学习资产并记录 diff。
 // 它只创建审计记录，不直接发布正式知识；有价值内容后续可人工转入候选资产池。
-func (s *Service) auditHermesLearning(ctx context.Context) error {
-	current, err := scanHermesLearningFiles(s.hermesHome)
+func (s *Service) auditRuntimeLearning(ctx context.Context) error {
+	provider := s.runtimeLearningProvider()
+	if provider == nil {
+		return nil
+	}
+	current, err := provider.Scan(s.runtimeHome)
 	if err != nil {
 		return err
 	}
-	latest, err := s.store.ListLatestHermesLearningAssets(ctx)
+	latest, err := s.store.ListLatestRuntimeLearningAssets(ctx)
 	if err != nil {
 		return err
 	}
@@ -205,22 +212,23 @@ func (s *Service) auditHermesLearning(ctx context.Context) error {
 	created := 0
 	for path, file := range current {
 		prev, ok := latest[path]
-		if ok && prev.ContentHash == file.hash && prev.ChangeType != model.HermesLearningChangeDeleted {
+		if ok && prev.ContentHash == file.hash && prev.ChangeType != model.RuntimeLearningChangeDeleted {
 			continue
 		}
-		changeType := model.HermesLearningChangeNew
+		changeType := model.RuntimeLearningChangeNew
 		if ok {
-			changeType = model.HermesLearningChangeModified
+			changeType = model.RuntimeLearningChangeModified
 		}
-		if err := s.store.CreateHermesLearningAsset(ctx, &model.HermesLearningAsset{
+		if err := s.store.CreateRuntimeLearningAsset(ctx, &model.RuntimeLearningAsset{
 			ID:          uuid.New().String(),
+			AgentType:   provider.AgentType(),
 			AssetType:   file.assetType,
 			Path:        path,
 			ContentHash: file.hash,
 			Content:     "",
 			ChangeType:  changeType,
 			RiskFlags:   "[]",
-			Status:      model.HermesLearningStatusPendingReview,
+			Status:      model.RuntimeLearningStatusPendingReview,
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		}); err != nil {
@@ -230,21 +238,22 @@ func (s *Service) auditHermesLearning(ctx context.Context) error {
 	}
 
 	for path, prev := range latest {
-		if prev.ChangeType == model.HermesLearningChangeDeleted {
+		if prev.ChangeType == model.RuntimeLearningChangeDeleted {
 			continue
 		}
 		if _, ok := current[path]; ok {
 			continue
 		}
-		if err := s.store.CreateHermesLearningAsset(ctx, &model.HermesLearningAsset{
+		if err := s.store.CreateRuntimeLearningAsset(ctx, &model.RuntimeLearningAsset{
 			ID:          uuid.New().String(),
+			AgentType:   provider.AgentType(),
 			AssetType:   prev.AssetType,
 			Path:        path,
 			ContentHash: "",
 			Content:     "",
-			ChangeType:  model.HermesLearningChangeDeleted,
+			ChangeType:  model.RuntimeLearningChangeDeleted,
 			RiskFlags:   "[]",
-			Status:      model.HermesLearningStatusPendingReview,
+			Status:      model.RuntimeLearningStatusPendingReview,
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		}); err != nil {
@@ -254,9 +263,16 @@ func (s *Service) auditHermesLearning(ctx context.Context) error {
 	}
 
 	if created > 0 {
-		s.logger.Info("Hermes learning audit records created", zap.Int("records", created))
+		s.logger.Info("runtime learning audit records created",
+			zap.String("agentType", provider.AgentType()),
+			zap.Int("records", created),
+		)
 	}
 	return nil
+}
+
+func (s *Service) auditHermesLearning(ctx context.Context) error {
+	return s.auditRuntimeLearning(ctx)
 }
 
 // distillOnce 把未处理的高价值反馈蒸馏为「候选资产(pending)」——不直接进回答链路
@@ -459,48 +475,48 @@ func (s *Service) ListCandidates(ctx context.Context, status model.CandidateAsse
 	return s.store.ListCandidates(ctx, status, 200)
 }
 
-// ListHermesLearningAssets 列出 Hermes 自学习审计记录。
-func (s *Service) ListHermesLearningAssets(ctx context.Context, status model.HermesLearningStatus) ([]*model.HermesLearningAsset, error) {
-	return s.store.ListHermesLearningAssets(ctx, status, 200)
+// ListRuntimeLearningAssets 列出 Agent Runtime 自学习审计记录。
+func (s *Service) ListRuntimeLearningAssets(ctx context.Context, status model.RuntimeLearningStatus) ([]*model.RuntimeLearningAsset, error) {
+	return s.store.ListRuntimeLearningAssets(ctx, status, 200)
 }
 
-// ReviewHermesLearningAsset 处理 Hermes 自学习审计记录。
-func (s *Service) ReviewHermesLearningAsset(ctx context.Context, id string, req ReviewHermesLearningRequest, reviewer string) (*model.HermesLearningAsset, error) {
-	asset, err := s.store.GetHermesLearningAsset(ctx, id)
+// ReviewRuntimeLearningAsset 处理 Agent Runtime 自学习审计记录。
+func (s *Service) ReviewRuntimeLearningAsset(ctx context.Context, id string, req ReviewRuntimeLearningRequest, reviewer string) (*model.RuntimeLearningAsset, error) {
+	asset, err := s.store.GetRuntimeLearningAsset(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	req.Action = strings.TrimSpace(req.Action)
 	req.Note = strings.TrimSpace(req.Note)
 
-	status := model.HermesLearningStatus("")
+	status := model.RuntimeLearningStatus("")
 	switch req.Action {
 	case "keep":
-		status = model.HermesLearningStatusKept
+		status = model.RuntimeLearningStatusKept
 	case "delete":
-		if asset.ChangeType != model.HermesLearningChangeDeleted && asset.Path != "" {
+		if asset.ChangeType != model.RuntimeLearningChangeDeleted && asset.Path != "" {
 			if err := os.Remove(asset.Path); err != nil && !os.IsNotExist(err) {
-				return nil, fmt.Errorf("删除 Hermes 文件失败: %w", err)
+				return nil, fmt.Errorf("删除 Runtime 文件失败: %w", err)
 			}
 		}
-		status = model.HermesLearningStatusDeleted
+		status = model.RuntimeLearningStatusDeleted
 	case "modify":
 		content := strings.TrimSpace(req.Content)
 		if content == "" {
 			return nil, fmt.Errorf("修改内容不能为空")
 		}
-		if asset.Path == "" || asset.ChangeType == model.HermesLearningChangeDeleted {
+		if asset.Path == "" || asset.ChangeType == model.RuntimeLearningChangeDeleted {
 			return nil, fmt.Errorf("删除记录无法修改内容")
 		}
 		if err := os.WriteFile(asset.Path, []byte(content+"\n"), 0o644); err != nil {
-			return nil, fmt.Errorf("写入 Hermes 文件失败: %w", err)
+			return nil, fmt.Errorf("写入 Runtime 文件失败: %w", err)
 		}
 		sum := sha256.Sum256([]byte(content + "\n"))
 		hash := hex.EncodeToString(sum[:])
-		if err := s.store.UpdateHermesLearningAssetReviewWithHash(ctx, id, model.HermesLearningStatusModified, hash, reviewer, req.Note); err != nil {
+		if err := s.store.UpdateRuntimeLearningAssetReviewWithHash(ctx, id, model.RuntimeLearningStatusModified, hash, reviewer, req.Note); err != nil {
 			return nil, err
 		}
-		asset.Status = model.HermesLearningStatusModified
+		asset.Status = model.RuntimeLearningStatusModified
 		asset.ContentHash = hash
 		asset.Content = content + "\n"
 		asset.Reviewer = reviewer
@@ -511,7 +527,7 @@ func (s *Service) ReviewHermesLearningAsset(ctx context.Context, id string, req 
 		return nil, fmt.Errorf("不支持的审计动作")
 	}
 
-	if err := s.store.UpdateHermesLearningAssetReview(ctx, id, status, reviewer, req.Note); err != nil {
+	if err := s.store.UpdateRuntimeLearningAssetReview(ctx, id, status, reviewer, req.Note); err != nil {
 		return nil, err
 	}
 	asset.Status = status
@@ -521,8 +537,8 @@ func (s *Service) ReviewHermesLearningAsset(ctx context.Context, id string, req 
 	return asset, nil
 }
 
-func (s *Service) AssistHermesLearningEdit(ctx context.Context, id string, req AssistHermesLearningEditRequest) (string, error) {
-	asset, err := s.store.GetHermesLearningAsset(ctx, id)
+func (s *Service) AssistRuntimeLearningEdit(ctx context.Context, id string, req AssistRuntimeLearningEditRequest) (string, error) {
+	asset, err := s.store.GetRuntimeLearningAsset(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -544,11 +560,11 @@ func (s *Service) AssistHermesLearningEdit(ctx context.Context, id string, req A
 	if spec.APIURL == "" || spec.APIToken == "" || spec.DefaultModel == "" {
 		return "", fmt.Errorf("未配置 API Base URL、Token 或模型")
 	}
-	return runAIHermesLearningEdit(ctx, spec, asset.AssetType, content, req.Instruction)
+	return runAIRuntimeLearningEdit(ctx, spec, asset, content, req.Instruction)
 }
 
-func (s *Service) AssistHermesLearningEditStream(ctx context.Context, id string, req AssistHermesLearningEditRequest, emit func(ManualDraftStreamEvent) error) error {
-	asset, err := s.store.GetHermesLearningAsset(ctx, id)
+func (s *Service) AssistRuntimeLearningEditStream(ctx context.Context, id string, req AssistRuntimeLearningEditRequest, emit func(ManualDraftStreamEvent) error) error {
+	asset, err := s.store.GetRuntimeLearningAsset(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -571,7 +587,7 @@ func (s *Service) AssistHermesLearningEditStream(ctx context.Context, id string,
 		return fmt.Errorf("未配置 API Base URL、Token 或模型")
 	}
 	raw := ""
-	result, err := runAIHermesLearningEditStream(ctx, spec, asset.AssetType, content, req.Instruction, func(delta string) error {
+	result, err := runAIRuntimeLearningEditStream(ctx, spec, asset, content, req.Instruction, func(delta string) error {
 		if delta == "" {
 			return nil
 		}
@@ -585,12 +601,28 @@ func (s *Service) AssistHermesLearningEditStream(ctx context.Context, id string,
 		if emitErr := emit(ManualDraftStreamEvent{Type: "status", Content: "流式连接中断，已切换为普通生成模式，请稍候。"}); emitErr != nil {
 			return emitErr
 		}
-		result, err = runAIHermesLearningEdit(ctx, spec, asset.AssetType, content, req.Instruction)
+		result, err = runAIRuntimeLearningEdit(ctx, spec, asset, content, req.Instruction)
 		if err != nil {
 			return err
 		}
 	}
 	return emit(ManualDraftStreamEvent{Type: "done", Content: result})
+}
+
+func (s *Service) ListHermesLearningAssets(ctx context.Context, status model.HermesLearningStatus) ([]*model.HermesLearningAsset, error) {
+	return s.ListRuntimeLearningAssets(ctx, status)
+}
+
+func (s *Service) ReviewHermesLearningAsset(ctx context.Context, id string, req ReviewHermesLearningRequest, reviewer string) (*model.HermesLearningAsset, error) {
+	return s.ReviewRuntimeLearningAsset(ctx, id, req, reviewer)
+}
+
+func (s *Service) AssistHermesLearningEdit(ctx context.Context, id string, req AssistHermesLearningEditRequest) (string, error) {
+	return s.AssistRuntimeLearningEdit(ctx, id, req)
+}
+
+func (s *Service) AssistHermesLearningEditStream(ctx context.Context, id string, req AssistHermesLearningEditRequest, emit func(ManualDraftStreamEvent) error) error {
+	return s.AssistRuntimeLearningEditStream(ctx, id, req, emit)
 }
 
 // ListLearningJobs 列出 AI 学习任务执行历史。
@@ -812,7 +844,7 @@ func (s *Service) ReviewCandidate(ctx context.Context, id string, approve bool, 
 	return cand, nil
 }
 
-// publishApproved 把审批通过的资产追加到 HERMES_HOME/approved_knowledge.md
+// publishApproved 把审批通过的资产追加到 Runtime 工作目录。
 func (s *Service) publishApproved(a *model.CandidateAsset) error {
 	targets := model.NormalizeKnowledgePublishTargets(a.PublishTargets)
 	for _, target := range targets {
@@ -833,10 +865,10 @@ func (s *Service) publishApproved(a *model.CandidateAsset) error {
 }
 
 func (s *Service) publishApprovedLocal(a *model.CandidateAsset) error {
-	if err := os.MkdirAll(s.hermesHome, 0o755); err != nil {
+	if err := os.MkdirAll(s.runtimeHome, 0o755); err != nil {
 		return err
 	}
-	path := filepath.Join(s.hermesHome, ApprovedFileName)
+	path := filepath.Join(s.runtimeHome, ApprovedFileName)
 	existing, _ := os.ReadFile(path)
 	content := string(existing)
 	if content == "" {
@@ -857,7 +889,7 @@ func (s *Service) publishApprovedSkill(a *model.CandidateAsset) error {
 	if name == "" {
 		name = a.ID
 	}
-	dir := filepath.Join(s.hermesHome, "skills", "callme-approved", name)
+	dir := filepath.Join(s.runtimeHome, "skills", "callme-approved", name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -896,7 +928,7 @@ func (s *Service) findUserQuestion(ctx context.Context, assistantMsg *model.Mess
 
 // ApprovedPath 正式知识文件路径（注入系统提示词用）
 func (s *Service) ApprovedPath() string {
-	return filepath.Join(s.hermesHome, ApprovedFileName)
+	return filepath.Join(s.runtimeHome, ApprovedFileName)
 }
 
 // ReadApproved 读取当前正式知识内容
@@ -938,20 +970,42 @@ func knowledgeSlug(s string) string {
 	return strings.Trim(truncate(b.String(), 80), "-")
 }
 
-type hermesLearningFile struct {
-	assetType model.HermesLearningAssetType
+type runtimeLearningFile struct {
+	assetType model.RuntimeLearningAssetType
 	hash      string
 	content   string
 }
 
-func scanHermesLearningFiles(home string) (map[string]hermesLearningFile, error) {
-	result := map[string]hermesLearningFile{}
+type runtimeLearningProvider interface {
+	AgentType() string
+	Scan(home string) (map[string]runtimeLearningFile, error)
+}
+
+func (s *Service) runtimeLearningProvider() runtimeLearningProvider {
+	spec := agent.AgentSpec{Type: "hermes"}
+	if s.agentSpec != nil {
+		spec = s.agentSpec()
+	}
+	switch strings.TrimSpace(spec.Type) {
+	case "", "hermes":
+		return hermesRuntimeLearningProvider{}
+	default:
+		return nil
+	}
+}
+
+type hermesRuntimeLearningProvider struct{}
+
+func (hermesRuntimeLearningProvider) AgentType() string { return "hermes" }
+
+func (hermesRuntimeLearningProvider) Scan(home string) (map[string]runtimeLearningFile, error) {
+	result := map[string]runtimeLearningFile{}
 	roots := []struct {
 		root      string
-		assetType model.HermesLearningAssetType
+		assetType model.RuntimeLearningAssetType
 	}{
-		{root: filepath.Join(home, "skills"), assetType: model.HermesLearningAssetSkill},
-		{root: filepath.Join(home, "memories"), assetType: model.HermesLearningAssetMemory},
+		{root: filepath.Join(home, "skills"), assetType: model.RuntimeLearningAssetSkill},
+		{root: filepath.Join(home, "memories"), assetType: model.RuntimeLearningAssetMemory},
 	}
 	for _, spec := range roots {
 		info, err := os.Stat(spec.root)
@@ -959,7 +1013,7 @@ func scanHermesLearningFiles(home string) (map[string]hermesLearningFile, error)
 			continue
 		}
 		if err := filepath.WalkDir(spec.root, func(path string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil || d.IsDir() || !isHermesLearningAssetFile(spec.root, path, spec.assetType) {
+			if walkErr != nil || d.IsDir() || !isRuntimeLearningAssetFile(spec.root, path, spec.assetType) {
 				return nil
 			}
 			data, err := os.ReadFile(path)
@@ -971,7 +1025,7 @@ func scanHermesLearningFiles(home string) (map[string]hermesLearningFile, error)
 			if err != nil {
 				abs = path
 			}
-			result[abs] = hermesLearningFile{
+			result[abs] = runtimeLearningFile{
 				assetType: spec.assetType,
 				hash:      hex.EncodeToString(sum[:]),
 				content:   string(data),
@@ -984,7 +1038,11 @@ func scanHermesLearningFiles(home string) (map[string]hermesLearningFile, error)
 	return result, nil
 }
 
-func isHermesLearningAssetFile(root, path string, assetType model.HermesLearningAssetType) bool {
+func scanHermesLearningFiles(home string) (map[string]runtimeLearningFile, error) {
+	return hermesRuntimeLearningProvider{}.Scan(home)
+}
+
+func isRuntimeLearningAssetFile(root, path string, assetType model.RuntimeLearningAssetType) bool {
 	if strings.HasSuffix(path, ".lock") {
 		return false
 	}
@@ -993,10 +1051,10 @@ func isHermesLearningAssetFile(root, path string, assetType model.HermesLearning
 		return false
 	}
 	switch assetType {
-	case model.HermesLearningAssetSkill:
+	case model.RuntimeLearningAssetSkill:
 		// Hermes skill 是一个目录资产，只有根 SKILL.md 才代表这个 skill。
 		return base == "SKILL.md"
-	case model.HermesLearningAssetMemory:
+	case model.RuntimeLearningAssetMemory:
 		if filepath.Ext(base) != ".md" {
 			return false
 		}
@@ -1318,11 +1376,11 @@ func parseOpenAIStreamDelta(payload string) string {
 	}
 }
 
-func runAIHermesLearningEdit(ctx context.Context, spec agent.AgentSpec, assetType model.HermesLearningAssetType, content, instruction string) (string, error) {
+func runAIRuntimeLearningEdit(ctx context.Context, spec agent.AgentSpec, asset *model.RuntimeLearningAsset, content, instruction string) (string, error) {
 	baseURL := strings.TrimRight(spec.APIURL, "/")
 	reqBody := map[string]any{
 		"model":       spec.DefaultModel,
-		"messages":    buildHermesLearningEditMessages(assetType, content, instruction),
+		"messages":    buildRuntimeLearningEditMessages(asset, content, instruction),
 		"temperature": 0.2,
 	}
 	data, err := json.Marshal(reqBody)
@@ -1342,7 +1400,7 @@ func runAIHermesLearningEdit(ctx context.Context, spec agent.AgentSpec, assetTyp
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("Hermes 自学习内容辅助修改失败: HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("Runtime 自学习内容辅助修改失败: HTTP %d", resp.StatusCode)
 	}
 	var parsed struct {
 		Choices []struct {
@@ -1369,30 +1427,40 @@ func runAIHermesLearningEdit(ctx context.Context, spec agent.AgentSpec, assetTyp
 	return out, nil
 }
 
-func buildHermesLearningEditMessages(assetType model.HermesLearningAssetType, content, instruction string) []map[string]string {
+func buildRuntimeLearningEditMessages(asset *model.RuntimeLearningAsset, content, instruction string) []map[string]string {
+	agentType := ""
+	assetType := model.RuntimeLearningAssetType("")
+	if asset != nil {
+		agentType = asset.AgentType
+		assetType = asset.AssetType
+	}
+	if agentType == "" {
+		agentType = "unknown"
+	}
 	return []map[string]string{
 		{
 			"role":    "system",
-			"content": "你是 Callme 的 Hermes 自学习审计助手。你只负责根据人工修改要求修订给定 Markdown 文件，不能编造事实，不能添加未提供的业务结论。只输出修订后的 Markdown 原文，不要输出解释、不要包裹代码块。",
+			"content": "你是 Callme 的 Agent Runtime 自学习审计助手。你只负责根据人工修改要求修订给定 Markdown 文件，不能编造事实，不能添加未提供的业务结论。只输出修订后的 Markdown 原文，不要输出解释、不要包裹代码块。",
 		},
 		{
 			"role": "user",
-			"content": fmt.Sprintf(`资产类型：%s
+			"content": fmt.Sprintf(`Agent 类型：%s
+资产类型：%s
 
 人工修改要求：
 %s
 
 原始 Markdown：
-%s`, assetType, instruction, content),
+%s`, agentType, assetType, instruction, content),
 		},
 	}
 }
 
-func runAIHermesLearningEditStream(ctx context.Context, spec agent.AgentSpec, assetType model.HermesLearningAssetType, content, instruction string, onDelta func(string) error) (string, error) {
+func runAIRuntimeLearningEditStream(ctx context.Context, spec agent.AgentSpec, asset *model.RuntimeLearningAsset, content, instruction string, onDelta func(string) error) (string, error) {
 	baseURL := strings.TrimRight(spec.APIURL, "/")
 	reqBody := map[string]any{
 		"model":       spec.DefaultModel,
-		"messages":    buildHermesLearningEditMessages(assetType, content, instruction),
+		"messages":    buildRuntimeLearningEditMessages(asset, content, instruction),
 		"temperature": 0.2,
 		"stream":      true,
 	}
@@ -1414,7 +1482,7 @@ func runAIHermesLearningEditStream(ctx context.Context, spec agent.AgentSpec, as
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("Hermes 自学习内容辅助修改失败: HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("Runtime 自学习内容辅助修改失败: HTTP %d", resp.StatusCode)
 	}
 	var raw strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
@@ -1452,6 +1520,18 @@ func runAIHermesLearningEditStream(ctx context.Context, spec agent.AgentSpec, as
 		return "", fmt.Errorf("AI 返回内容为空")
 	}
 	return out, nil
+}
+
+func runAIHermesLearningEdit(ctx context.Context, spec agent.AgentSpec, assetType model.HermesLearningAssetType, content, instruction string) (string, error) {
+	return runAIRuntimeLearningEdit(ctx, spec, &model.RuntimeLearningAsset{AgentType: "hermes", AssetType: assetType}, content, instruction)
+}
+
+func buildHermesLearningEditMessages(assetType model.HermesLearningAssetType, content, instruction string) []map[string]string {
+	return buildRuntimeLearningEditMessages(&model.RuntimeLearningAsset{AgentType: "hermes", AssetType: assetType}, content, instruction)
+}
+
+func runAIHermesLearningEditStream(ctx context.Context, spec agent.AgentSpec, assetType model.HermesLearningAssetType, content, instruction string, onDelta func(string) error) (string, error) {
+	return runAIRuntimeLearningEditStream(ctx, spec, &model.RuntimeLearningAsset{AgentType: "hermes", AssetType: assetType}, content, instruction, onDelta)
 }
 
 func firstString(values []string) string {

@@ -31,8 +31,8 @@ import { formatAITaskContent } from '../../utils/aiTaskFormat';
 import type {
   CandidateAsset,
   CandidateAssetStatus,
-  HermesLearningAsset,
-  HermesLearningStatus,
+  RuntimeLearningAsset,
+  RuntimeLearningStatus,
   ImageAttachment,
   KnowledgePublishTarget,
   LearningJob,
@@ -49,7 +49,7 @@ const statusMeta: Record<CandidateAssetStatus, { label: string; color: string }>
   rejected: { label: '已拒绝', color: 'default' },
 };
 
-const hermesStatusMeta: Record<HermesLearningStatus, { label: string; color: string }> = {
+const runtimeStatusMeta: Record<RuntimeLearningStatus, { label: string; color: string }> = {
   pending_review: { label: '待审计', color: 'gold' },
   kept: { label: '已保留', color: 'green' },
   modified: { label: '已修改', color: 'blue' },
@@ -67,7 +67,7 @@ const jobStatusMeta: Record<LearningJobStatus, { label: string; color: string }>
 
 const publishTargetMeta: Record<KnowledgePublishTarget, { label: string; color: string; description: string }> = {
   local: { label: '本地知识', color: 'green', description: '写入 approved_knowledge.md，作为正式知识依据' },
-  skill: { label: 'Skill', color: 'purple', description: '写入 Hermes skills/callme-approved' },
+  skill: { label: 'Skill', color: 'purple', description: '写入当前 Agent Runtime 的 Skill 目录' },
   knowledge_base: { label: '知识库', color: 'blue', description: '外部知识库写入器待接入' },
 };
 
@@ -77,7 +77,7 @@ const publishTargetOptions = [
   { label: '写入知识库（待接入）', value: 'knowledge_base' as KnowledgePublishTarget, disabled: true },
 ];
 
-type HermesReviewAction = 'keep' | 'delete' | 'modify';
+type RuntimeReviewAction = 'keep' | 'delete' | 'modify';
 
 function normalizePublishTargets(targets?: KnowledgePublishTarget[]): KnowledgePublishTarget[] {
   return targets?.length ? targets : ['local'];
@@ -99,7 +99,7 @@ function parseEvidence(raw?: string): Record<string, unknown> | null {
   }
 }
 
-function formatHermesAssetContent(row: HermesLearningAsset): string {
+function formatRuntimeAssetContent(row: RuntimeLearningAsset): string {
   const content = row.content?.trim();
   if (!content) return '（删除记录或内容为空）';
   if (row.assetType === 'skill') {
@@ -114,21 +114,21 @@ export default function CurationPage() {
   const usingRole = activeRole && roles.includes(activeRole as typeof roles[number]) ? activeRole : user?.role;
   const canReview = usingRole === 'admin' || usingRole === 'knowledge_expert';
   const { startTask, appendTask, setTaskContent, finishTask, failTask } = useAITaskStore();
-  const [track, setTrack] = useState<'candidates' | 'approved' | 'hermes'>('candidates');
+  const [track, setTrack] = useState<'candidates' | 'approved' | 'runtime'>('candidates');
   const [candidateView, setCandidateView] = useState<'manual' | 'ai' | 'review' | 'jobs'>('manual');
   const [status, setStatus] = useState<CandidateAssetStatus>('pending');
-  const [hermesStatus, setHermesStatus] = useState<HermesLearningStatus>('pending_review');
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeLearningStatus>('pending_review');
   const [items, setItems] = useState<CandidateAsset[]>([]);
-  const [hermesItems, setHermesItems] = useState<HermesLearningAsset[]>([]);
+  const [runtimeItems, setRuntimeItems] = useState<RuntimeLearningAsset[]>([]);
   const [jobs, setJobs] = useState<LearningJob[]>([]);
   const [approvedNotes, setApprovedNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [learningStarting, setLearningStarting] = useState(false);
-  const [reviewingHermesID, setReviewingHermesID] = useState<string | null>(null);
-  const [viewingHermes, setViewingHermes] = useState<HermesLearningAsset | null>(null);
-  const [hermesDraftContent, setHermesDraftContent] = useState('');
-  const [hermesAIInstruction, setHermesAIInstruction] = useState('');
-  const [hermesAILoading, setHermesAILoading] = useState(false);
+  const [reviewingRuntimeID, setReviewingRuntimeID] = useState<string | null>(null);
+  const [viewingRuntime, setViewingRuntime] = useState<RuntimeLearningAsset | null>(null);
+  const [runtimeDraftContent, setRuntimeDraftContent] = useState('');
+  const [runtimeAIInstruction, setRuntimeAIInstruction] = useState('');
+  const [runtimeAILoading, setRuntimeAILoading] = useState(false);
   const [editing, setEditing] = useState<CandidateAsset | null>(null);
   const [viewing, setViewing] = useState<CandidateAsset | null>(null);
   const [rejecting, setRejecting] = useState<CandidateAsset | null>(null);
@@ -138,12 +138,12 @@ export default function CurationPage() {
   const [manualImages, setManualImages] = useState<ImageAttachment[]>([]);
   const [manualStreaming, setManualStreaming] = useState(false);
   const [manualStreamContent, setManualStreamContent] = useState('');
-  const hermesEditorRef = useRef<HTMLTextAreaElement | null>(null);
-  const hermesPreviewRef = useRef<HTMLDivElement | null>(null);
+  const runtimeEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const runtimePreviewRef = useRef<HTMLDivElement | null>(null);
 
-  const syncHermesPreviewScroll = useCallback(() => {
-    const editor = hermesEditorRef.current;
-    const preview = hermesPreviewRef.current;
+  const syncRuntimePreviewScroll = useCallback(() => {
+    const editor = runtimeEditorRef.current;
+    const preview = runtimePreviewRef.current;
     if (!editor || !preview) return;
     const maxFrom = editor.scrollHeight - editor.clientHeight;
     const maxTo = preview.scrollHeight - preview.clientHeight;
@@ -159,8 +159,8 @@ export default function CurationPage() {
       }
       if (track === 'candidates' && candidateView === 'review') {
         setItems(await api.listCandidates(status));
-      } else if (track === 'hermes') {
-        setHermesItems(await api.listHermesLearningAssets(hermesStatus));
+      } else if (track === 'runtime') {
+        setRuntimeItems(await api.listRuntimeLearningAssets(runtimeStatus));
       } else if (track === 'candidates' && candidateView === 'jobs') {
         setJobs(await api.listLearningJobs());
       } else {
@@ -171,10 +171,10 @@ export default function CurationPage() {
     } finally {
       setLoading(false);
     }
-  }, [track, candidateView, status, hermesStatus]);
+  }, [track, candidateView, status, runtimeStatus]);
 
   useEffect(() => {
-    if (!canReview && track === 'hermes') {
+    if (!canReview && track === 'runtime') {
       setTrack('candidates');
       return;
     }
@@ -195,14 +195,14 @@ export default function CurationPage() {
   }, [track, candidateView, jobs]);
 
   useEffect(() => {
-    if (!viewingHermes) {
-      setHermesDraftContent('');
-      setHermesAIInstruction('');
+    if (!viewingRuntime) {
+      setRuntimeDraftContent('');
+      setRuntimeAIInstruction('');
       return;
     }
-    setHermesDraftContent(formatHermesAssetContent(viewingHermes));
-    setHermesAIInstruction('');
-  }, [viewingHermes]);
+    setRuntimeDraftContent(formatRuntimeAssetContent(viewingRuntime));
+    setRuntimeAIInstruction('');
+  }, [viewingRuntime]);
 
   const approve = async (c: CandidateAsset) => {
     try {
@@ -242,51 +242,51 @@ export default function CurationPage() {
     }
   };
 
-  const reviewHermesAsset = async (row: HermesLearningAsset, action: HermesReviewAction) => {
-    const actionLabels: Record<HermesReviewAction, string> = {
+  const reviewRuntimeAsset = async (row: RuntimeLearningAsset, action: RuntimeReviewAction) => {
+    const actionLabels: Record<RuntimeReviewAction, string> = {
       keep: '保留',
       delete: '删除',
       modify: '保存修改',
     };
-    setReviewingHermesID(row.id);
+    setReviewingRuntimeID(row.id);
     try {
-      await api.reviewHermesLearningAsset(row.id, action, undefined, action === 'modify' ? hermesDraftContent : undefined);
+      await api.reviewRuntimeLearningAsset(row.id, action, undefined, action === 'modify' ? runtimeDraftContent : undefined);
       message.success(`已${actionLabels[action]}`);
-      setHermesItems((prev) => prev.filter((item) => item.id !== row.id));
-      setViewingHermes(null);
+      setRuntimeItems((prev) => prev.filter((item) => item.id !== row.id));
+      setViewingRuntime(null);
     } catch (err) {
       message.error(apiErrorMessage(err));
     } finally {
-      setReviewingHermesID(null);
+      setReviewingRuntimeID(null);
     }
   };
 
-  const assistHermesEdit = async () => {
-    if (!viewingHermes) return;
-    if (!hermesAIInstruction.trim()) {
+  const assistRuntimeEdit = async () => {
+    if (!viewingRuntime) return;
+    if (!runtimeAIInstruction.trim()) {
       message.warning('请先输入希望 AI 修改的要求');
       return;
     }
-    const draftBeforeEdit = hermesDraftContent.trim();
+    const draftBeforeEdit = runtimeDraftContent.trim();
     if (!draftBeforeEdit) {
       message.warning('当前审计内容为空，无法生成修订稿。可以先补充内容，或直接删除这条空文件记录。');
       return;
     }
-    setHermesAILoading(true);
-    const taskId = startTask({ title: 'AI 修订 Hermes 内容', source: '知识沉淀 / Hermes 审计' });
-    setHermesDraftContent('');
+    setRuntimeAILoading(true);
+    const taskId = startTask({ title: 'AI 修订 Runtime 内容', source: '知识沉淀 / Runtime 审计' });
+    setRuntimeDraftContent('');
     try {
-      await api.streamHermesLearningEdit(viewingHermes.id, hermesAIInstruction.trim(), draftBeforeEdit, (event) => {
+      await api.streamRuntimeLearningEdit(viewingRuntime.id, runtimeAIInstruction.trim(), draftBeforeEdit, (event) => {
         if (event.type === 'status') {
           setTaskContent(taskId, event.content ?? '');
         }
         if (event.type === 'delta') {
           const delta = event.delta ?? '';
-          setHermesDraftContent((prev) => prev + delta);
+          setRuntimeDraftContent((prev) => prev + delta);
           appendTask(taskId, delta);
         }
         if (event.type === 'done') {
-          setHermesDraftContent(event.content ?? '');
+          setRuntimeDraftContent(event.content ?? '');
           setTaskContent(taskId, event.content ?? '');
           finishTask(taskId);
         }
@@ -297,7 +297,7 @@ export default function CurationPage() {
       failTask(taskId, msg);
       message.error(msg);
     } finally {
-      setHermesAILoading(false);
+      setRuntimeAILoading(false);
     }
   };
 
@@ -424,19 +424,19 @@ export default function CurationPage() {
         </Space>
       </Space>
       <Paragraph type="secondary" style={{ fontSize: 13 }}>
-        {canReview ? '知识候选统一进入审批流；Hermes 自学习单独审计纠偏。' : '知识专员可录入并维护候选知识，提交后由知识专家或管理员审批。'}
+        {canReview ? '知识候选统一进入审批流；Agent 自学习单独审计纠偏。' : '知识专员可录入并维护候选知识，提交后由知识专家或管理员审批。'}
         <Text strong>业务事实必须审批后才可作为正式依据</Text>。
       </Paragraph>
 
       <Segmented
         style={{ marginBottom: 12 }}
         value={track}
-        onChange={(v) => setTrack(v as 'candidates' | 'approved' | 'hermes')}
+        onChange={(v) => setTrack(v as 'candidates' | 'approved' | 'runtime')}
         options={[
           { label: '候选知识', value: 'candidates' },
           { label: '正式知识', value: 'approved' },
           ...(canReview ? [
-            { label: 'Hermes 自学习审计', value: 'hermes' },
+            { label: 'Agent 自学习审计', value: 'runtime' },
           ] : []),
         ]}
       />
@@ -467,11 +467,11 @@ export default function CurationPage() {
           ]}
         />
       )}
-      {track === 'hermes' && (
+      {track === 'runtime' && (
         <Segmented
           style={{ marginBottom: 16, display: 'block' }}
-          value={hermesStatus}
-          onChange={(v) => setHermesStatus(v as HermesLearningStatus)}
+          value={runtimeStatus}
+          onChange={(v) => setRuntimeStatus(v as RuntimeLearningStatus)}
         options={[
           { label: '待审计', value: 'pending_review' },
           { label: '已保留', value: 'kept' },
@@ -555,7 +555,7 @@ export default function CurationPage() {
             </Space>
             {(manualStreaming || manualStreamContent) && (
               <Card size="small" title="AI 生成过程">
-                <div className={`hermes-asset-preview markdown-body ${manualStreaming ? 'streaming-cursor' : ''}`}>
+                <div className={`runtime-asset-preview markdown-body ${manualStreaming ? 'streaming-cursor' : ''}`}>
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {manualStreamContent ? formatAITaskContent(manualStreamContent) : '正在连接 AI，请稍候…'}
                   </ReactMarkdown>
@@ -654,12 +654,12 @@ export default function CurationPage() {
             ]}
           />
         ))}
-        {track === 'hermes' && (hermesItems.length === 0 ? (
-          <Empty description="暂无 Hermes 自学习审计记录" />
+        {track === 'runtime' && (runtimeItems.length === 0 ? (
+          <Empty description="暂无 Agent 自学习审计记录" />
         ) : (
-          <Table<HermesLearningAsset>
+          <Table<RuntimeLearningAsset>
             rowKey="id"
-            dataSource={hermesItems}
+            dataSource={runtimeItems}
             loading={loading}
             pagination={{ pageSize: 10 }}
             columns={[
@@ -688,7 +688,7 @@ export default function CurationPage() {
                 title: '状态',
                 dataIndex: 'status',
                 width: 110,
-                render: (s: HermesLearningStatus) => <Tag color={hermesStatusMeta[s].color}>{hermesStatusMeta[s].label}</Tag>,
+                render: (s: RuntimeLearningStatus) => <Tag color={runtimeStatusMeta[s].color}>{runtimeStatusMeta[s].label}</Tag>,
               },
               {
                 title: '时间',
@@ -700,7 +700,7 @@ export default function CurationPage() {
                 title: '操作',
                 width: 110,
                 render: (_, row) => (
-                  <Button size="small" onClick={() => setViewingHermes(row)}>
+                  <Button size="small" onClick={() => setViewingRuntime(row)}>
                     查看处理
                   </Button>
                 ),
@@ -750,7 +750,7 @@ export default function CurationPage() {
             bordered={false}
           >
             <Paragraph type="secondary">
-              这里展示已人工审批发布的正式客服知识。候选知识和 Hermes 自学习审计记录在通过前不会自动进入这里。
+              这里展示已人工审批发布的正式客服知识。候选知识和 Agent 自学习审计记录在通过前不会自动进入这里。
             </Paragraph>
             <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 560, overflow: 'auto', fontSize: 13, margin: 0 }}>
               {approvedNotes || '（暂无正式知识；候选知识通过人工审批后会发布到这里）'}
@@ -760,37 +760,37 @@ export default function CurationPage() {
       </Card>
 
       <Modal
-        title={viewingHermes?.assetType === 'skill' ? 'Skill 审计处理' : 'Memory 审计处理'}
-        open={!!viewingHermes}
+        title={viewingRuntime?.assetType === 'skill' ? 'Skill 审计处理' : 'Memory 审计处理'}
+        open={!!viewingRuntime}
         width={900}
-        onCancel={() => setViewingHermes(null)}
-        footer={viewingHermes ? (
+        onCancel={() => setViewingRuntime(null)}
+        footer={viewingRuntime ? (
           <Space wrap>
-            <Button onClick={() => setViewingHermes(null)}>关闭</Button>
-            {viewingHermes.status === 'pending_review' && (
+            <Button onClick={() => setViewingRuntime(null)}>关闭</Button>
+            {viewingRuntime.status === 'pending_review' && (
               <>
                 <Button
                   type="primary"
-                  loading={reviewingHermesID === viewingHermes.id}
-                  onClick={() => reviewHermesAsset(viewingHermes, 'keep')}
+                  loading={reviewingRuntimeID === viewingRuntime.id}
+                  onClick={() => reviewRuntimeAsset(viewingRuntime, 'keep')}
                 >
                   保留
                 </Button>
                 <Button
-                  loading={reviewingHermesID === viewingHermes.id}
-                  onClick={() => reviewHermesAsset(viewingHermes, 'modify')}
+                  loading={reviewingRuntimeID === viewingRuntime.id}
+                  onClick={() => reviewRuntimeAsset(viewingRuntime, 'modify')}
                 >
                   保存修改并生效
                 </Button>
                 <Popconfirm
-                  title="删除 Hermes 自学习文件？"
+                  title="删除 Agent 自学习文件？"
                   description="会删除磁盘上的对应文件，并把该审计记录标记为已删除。"
                   okText="删除"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
-                  onConfirm={() => reviewHermesAsset(viewingHermes, 'delete')}
+                  onConfirm={() => reviewRuntimeAsset(viewingRuntime, 'delete')}
                 >
-                  <Button danger loading={reviewingHermesID === viewingHermes.id}>
+                  <Button danger loading={reviewingRuntimeID === viewingRuntime.id}>
                     删除文件
                   </Button>
                 </Popconfirm>
@@ -799,57 +799,57 @@ export default function CurationPage() {
           </Space>
         ) : null}
       >
-        {viewingHermes && (
+        {viewingRuntime && (
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <Space wrap>
-              <Tag color={viewingHermes.assetType === 'skill' ? 'purple' : 'blue'}>{viewingHermes.assetType}</Tag>
-              <Tag>{viewingHermes.changeType}</Tag>
-              <Tag color={hermesStatusMeta[viewingHermes.status]?.color}>
-                {hermesStatusMeta[viewingHermes.status]?.label ?? viewingHermes.status}
+              <Tag color={viewingRuntime.assetType === 'skill' ? 'purple' : 'blue'}>{viewingRuntime.assetType}</Tag>
+              <Tag>{viewingRuntime.changeType}</Tag>
+              <Tag color={runtimeStatusMeta[viewingRuntime.status]?.color}>
+                {runtimeStatusMeta[viewingRuntime.status]?.label ?? viewingRuntime.status}
               </Tag>
             </Space>
-            <Text code copyable style={{ whiteSpace: 'normal' }}>{viewingHermes.path}</Text>
-            {viewingHermes.status === 'pending_review' && (
+            <Text code copyable style={{ whiteSpace: 'normal' }}>{viewingRuntime.path}</Text>
+            {viewingRuntime.status === 'pending_review' && (
               <Card size="small" title="AI 辅助修改">
                 <Space direction="vertical" style={{ width: '100%' }} size={8}>
                   <Input.TextArea
                     rows={2}
-                    value={hermesAIInstruction}
-                    onChange={(e) => setHermesAIInstruction(e.target.value)}
+                    value={runtimeAIInstruction}
+                    onChange={(e) => setRuntimeAIInstruction(e.target.value)}
                     placeholder="描述希望 AI 如何修改，例如：删除不确定的业务结论，补充适用范围，把语气改成客服可用的步骤说明"
                   />
-                  <Button loading={hermesAILoading} onClick={assistHermesEdit}>
+                  <Button loading={runtimeAILoading} onClick={assistRuntimeEdit}>
                     AI 生成修订稿
                   </Button>
                 </Space>
               </Card>
             )}
-            <div className="hermes-review-split">
-              <Card size="small" title="编写稿" className="hermes-review-pane">
+            <div className="runtime-review-split">
+              <Card size="small" title="编写稿" className="runtime-review-pane">
                 <Input.TextArea
-                  ref={hermesEditorRef}
-                  value={hermesDraftContent}
-                  onChange={(e) => setHermesDraftContent(e.target.value)}
-                  onScroll={syncHermesPreviewScroll}
-                  disabled={viewingHermes.status !== 'pending_review'}
-                  className="hermes-review-editor"
+                  ref={runtimeEditorRef}
+                  value={runtimeDraftContent}
+                  onChange={(e) => setRuntimeDraftContent(e.target.value)}
+                  onScroll={syncRuntimePreviewScroll}
+                  disabled={viewingRuntime.status !== 'pending_review'}
+                  className="runtime-review-editor"
                 />
               </Card>
-              <Card size="small" title="预览" className="hermes-review-pane">
+              <Card size="small" title="预览" className="runtime-review-pane">
                 <div
-                  ref={hermesPreviewRef}
-                  className="hermes-asset-preview markdown-body hermes-review-preview"
+                  ref={runtimePreviewRef}
+                  className="runtime-asset-preview markdown-body runtime-review-preview"
                 >
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{hermesDraftContent}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{runtimeDraftContent}</ReactMarkdown>
                 </div>
               </Card>
             </div>
-            {viewingHermes.status === 'pending_review' && (
+            {viewingRuntime.status === 'pending_review' && (
               <Text type="secondary">
-                可以人工修改，也可以让 AI 生成修订稿；只有点击“保存修改并生效”才会写回 Hermes 文件。
+                可以人工修改，也可以让 AI 生成修订稿；只有点击“保存修改并生效”才会写回 Runtime 文件。
               </Text>
             )}
-            {viewingHermes.reviewNote && <Text type="secondary">审计备注：{viewingHermes.reviewNote}</Text>}
+            {viewingRuntime.reviewNote && <Text type="secondary">审计备注：{viewingRuntime.reviewNote}</Text>}
           </Space>
         )}
       </Modal>

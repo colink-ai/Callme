@@ -692,6 +692,9 @@ func (s *Service) CreateManualDraft(ctx context.Context, req ManualDraftRequest)
 		return nil, fmt.Errorf("未配置 AI 模型")
 	}
 	spec := s.agentSpec()
+	if len(req.Images) > 0 && !spec.SupportsMultimodal {
+		return nil, fmt.Errorf("当前启用的模型不支持图片输入，请切换到支持多模态的模型后再上传图片证据")
+	}
 	if spec.APIURL == "" || spec.APIToken == "" || spec.DefaultModel == "" {
 		return nil, fmt.Errorf("未配置 API Base URL、Token 或模型")
 	}
@@ -761,6 +764,9 @@ func (s *Service) CreateManualDraftStream(ctx context.Context, req ManualDraftRe
 		return fmt.Errorf("未配置 AI 模型")
 	}
 	spec := s.agentSpec()
+	if len(req.Images) > 0 && !spec.SupportsMultimodal {
+		return fmt.Errorf("当前启用的模型不支持图片输入，请切换到支持多模态的模型后再上传图片证据")
+	}
 	if spec.APIURL == "" || spec.APIToken == "" || spec.DefaultModel == "" {
 		return fmt.Errorf("未配置 API Base URL、Token 或模型")
 	}

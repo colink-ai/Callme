@@ -403,6 +403,9 @@ func TestValidationAndStopBoundaries(t *testing.T) {
 	if err := m.HandleUserMessage(ctx, "missing", "hi", nil); err != ErrSessionGone {
 		t.Fatalf("message to missing session should return ErrSessionGone, got %v", err)
 	}
+	if err := m.HandleUserMessage(ctx, v.ID, "看图", []model.ImageContent{{MimeType: "image/png", Data: "aA=="}}); err == nil || !strings.Contains(err.Error(), "不支持图片输入") {
+		t.Fatalf("non-multimodal model should reject images, got %v", err)
+	}
 }
 
 func TestInternalErrorAndCleanupHelpers(t *testing.T) {

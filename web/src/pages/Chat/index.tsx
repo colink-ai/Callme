@@ -50,7 +50,7 @@ import remarkGfm from 'remark-gfm';
 import dayjs from 'dayjs';
 import { useChatStore, toChatMessage, type AgentStep, type ChatMessage } from '../../store/chatStore';
 import { api, apiErrorMessage } from '../../api/client';
-import type { ImageAttachment, Session } from '../../types';
+import type { AgentCapabilities, ImageAttachment, Session } from '../../types';
 import { LogoIcon } from '../../components/Logo';
 import HermesIcon from '../../components/HermesIcon';
 
@@ -376,12 +376,34 @@ function HistorySidebar({
   onCollapse: () => void;
   starting: boolean;
 }) {
+  const copyText = async (text: string) => {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    if (!ok) throw new Error('copy failed');
+  };
+
   const copySessionId = async (session: Session) => {
     try {
-      await navigator.clipboard.writeText(session.id);
+      await copyText(session.id);
       antMessage.success('会话 ID 已复制');
     } catch {
-      antMessage.error('复制失败，请手动复制会话 ID');
+      Modal.info({
+        title: '请手动复制会话 ID',
+        content: <Input.TextArea value={session.id} autoSize readOnly onFocus={(e) => e.target.select()} />,
+      });
     }
   };
 
@@ -550,6 +572,7 @@ export default function ChatPage() {
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [handoffReason, setHandoffReason] = useState('');
+  const [agentCapabilities, setAgentCapabilities] = useState<AgentCapabilities | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
@@ -557,6 +580,12 @@ export default function ChatPage() {
   useEffect(() => {
     restoreSession();
   }, [restoreSession]);
+
+  useEffect(() => {
+    api.getAgentCapabilities()
+      .then(setAgentCapabilities)
+      .catch(() => setAgentCapabilities(null));
+  }, []);
 
   const isNearBottom = useCallback((el: HTMLDivElement) => (
     el.scrollHeight - el.scrollTop - el.clientHeight <= AUTO_SCROLL_BOTTOM_THRESHOLD
@@ -590,6 +619,10 @@ export default function ChatPage() {
   const active = session?.status === 'active' && !closedReason;
   const queued = session?.status === 'queued' && !closedReason && position > 0;
   const connecting = (session?.status === 'queued' && !closedReason && position <= 0) || starting;
+  const supportsMultimodal = agentCapabilities?.supportsMultimodal === true;
+  const multimodalDisabledTip = agentCapabilities
+    ? `当前启用模型 ${agentCapabilities.defaultModel || '未配置'} 不支持图片输入，请切换到支持多模态的模型后再上传图片。`
+    : '当前模型能力读取中，请稍后再上传图片。';
 
   const fileToImageAttachment = useCallback((file: File): Promise<ImageAttachment> => {
     return new Promise((resolve, reject) => {
@@ -621,6 +654,10 @@ export default function ChatPage() {
   }, []);
 
   const addImageFile = useCallback(async (file: File) => {
+    if (!supportsMultimodal) {
+      antMessage.warning(multimodalDisabledTip);
+      return false;
+    }
     if (!file.type.startsWith('image/')) {
       antMessage.warning('只能添加图片文件');
       return false;
@@ -640,7 +677,7 @@ export default function ChatPage() {
       antMessage.error(apiErrorMessage(err));
     }
     return false;
-  }, [fileToImageAttachment, images.length]);
+  }, [fileToImageAttachment, images.length, multimodalDisabledTip, supportsMultimodal]);
 
   const removeImage = (id?: string) => {
     setImages((prev) => prev.filter((img) => img.id !== id));
@@ -668,11 +705,30 @@ export default function ChatPage() {
   const onSend = () => {
     const content = input.trim();
     if ((!content && images.length === 0) || busy || !active) return;
+    if (images.length > 0 && !supportsMultimodal) {
+      antMessage.warning(multimodalDisabledTip);
+      return;
+    }
     setStickToBottom(true);
     setShowScrollBottom(false);
     sendMessage(content, images.length > 0 ? images : undefined);
     setInput('');
     setImages([]);
+  };
+
+  const restartClosedSession = async () => {
+    if (!session) {
+      startSession();
+      return;
+    }
+    try {
+      setViewing(null);
+      await continueSession(session.id);
+      await loadHistory();
+      antMessage.success('已继续当前会话');
+    } catch (err) {
+      antMessage.error(apiErrorMessage(err));
+    }
   };
 
   const closeReasonText: Record<string, string> = {
@@ -767,7 +823,7 @@ export default function ChatPage() {
             {closedReason && (
               <Alert type="info" showIcon style={{ marginBottom: 8 }}
                 message={closeReasonText[closedReason] ?? '会话已结束'}
-                action={<Button size="small" type="primary" onClick={startSession}>重新开始</Button>} />
+                action={<Button size="small" type="primary" loading={starting} onClick={restartClosedSession}>继续会话</Button>} />
             )}
 
             {/* 消息区 */}
@@ -837,6 +893,14 @@ export default function ChatPage() {
             {/* 输入区 */}
             {active && (
               <div className="chat-input-wrap" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+                {!supportsMultimodal && (
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 8 }}
+                    message="当前模型不支持图片输入，文字问答可正常使用"
+                  />
+                )}
                 {images.length > 0 && (
                   <div className="image-preview-strip">
                     {images.map((img, index) => (
@@ -881,12 +945,14 @@ export default function ChatPage() {
                       beforeUpload={addImageFile}
                       multiple
                     >
-                      <Button
-                        type="text"
-                        icon={<PictureOutlined />}
-                        disabled={busy || images.length >= MAX_IMAGES}
-                        className="image-upload-button"
-                      />
+                      <Tooltip title={supportsMultimodal ? '添加图片' : multimodalDisabledTip}>
+                        <Button
+                          type="text"
+                          icon={<PictureOutlined />}
+                          disabled={busy || !supportsMultimodal || images.length >= MAX_IMAGES}
+                          className="image-upload-button"
+                        />
+                      </Tooltip>
                     </Upload>
                   </div>
                   <Button

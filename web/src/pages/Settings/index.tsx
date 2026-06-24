@@ -10,6 +10,7 @@ import {
   Popconfirm,
   Select,
   Space,
+  Switch,
   Tag,
   Typography,
   message,
@@ -36,6 +37,7 @@ const emptyAgentSettings = (type = 'hermes', cliPath = ''): AgentSettings => ({
   apiUrl: '',
   apiToken: '',
   systemPrompt: '',
+  supportsMultimodal: false,
 });
 
 const makeProfile = (settings: AgentSettings, index: number): AgentProfile => ({
@@ -319,6 +321,14 @@ export default function SettingsPage() {
               </Form.Item>
               <Form.Item label="API Token（可选）" name="apiToken" style={{ minWidth: 280 }}>
                 <Input.Password placeholder="留空或保持掩码则不修改" />
+              </Form.Item>
+              <Form.Item
+                label="支持多模态"
+                name="supportsMultimodal"
+                valuePropName="checked"
+                tooltip="开启后允许用户和内部 AI 任务提交图片；默认关闭，避免把图片发给不支持视觉能力的模型。"
+              >
+                <Switch checkedChildren="支持" unCheckedChildren="关闭" />
               </Form.Item>
             </Space>
             <Form.Item

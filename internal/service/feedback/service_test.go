@@ -263,7 +263,7 @@ func TestReviewHermesLearningAssetModifiesFile(t *testing.T) {
 func TestManualDraftAndAIHelpers(t *testing.T) {
 	s, _, home := newTestService(t)
 	ctx := context.Background()
-	spec := agent.AgentSpec{DefaultModel: "test-model", APIURL: "http://callme-ai.test", APIToken: "token"}
+	spec := agent.AgentSpec{DefaultModel: "test-model", APIURL: "http://callme-ai.test", APIToken: "token", SupportsMultimodal: true}
 	s.agentSpec = func() agent.AgentSpec { return spec }
 
 	restore := mockFeedbackAI(t, func(req *http.Request, body string) string {

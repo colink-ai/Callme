@@ -48,19 +48,23 @@ func TestAgentSettingsMaskingAndTokenRetention(t *testing.T) {
 	}
 
 	err := svc.UpdateAgentSettings(ctx, model.AgentSettings{
-		Type:         "hermes",
-		CliPath:      "hermes-custom",
-		DefaultModel: "glm-6",
-		APIURL:       "https://new.example/v1",
-		APIToken:     "****",
-		SystemPrompt: "new prompt",
+		Type:               "hermes",
+		CliPath:            "hermes-custom",
+		DefaultModel:       "glm-6",
+		APIURL:             "https://new.example/v1",
+		APIToken:           "****",
+		SystemPrompt:       "new prompt",
+		SupportsMultimodal: true,
 	})
 	if err != nil {
 		t.Fatalf("update agent settings: %v", err)
 	}
 	spec := svc.AgentSpec()
-	if spec.APIToken != "secret-token" || spec.DefaultModel != "glm-6" || spec.CliPath != "hermes-custom" {
+	if spec.APIToken != "secret-token" || spec.DefaultModel != "glm-6" || spec.CliPath != "hermes-custom" || !spec.SupportsMultimodal {
 		t.Fatalf("token should be retained and settings updated, spec=%+v", spec)
+	}
+	if caps := svc.GetAgentCapabilities(); !caps.SupportsMultimodal || caps.DefaultModel != "glm-6" {
+		t.Fatalf("capabilities should expose active model flags, got %+v", caps)
 	}
 
 	reloaded := NewService(store, config.AgentConfig{Type: "mock", CliPath: "mock"}, config.SessionConfig{}, zap.NewNop())

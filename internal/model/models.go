@@ -399,13 +399,14 @@ type LearningJob struct {
 
 // AgentSettings 运行时 Agent 配置（持久化在 DB，可在 Settings 页修改，覆盖 config.yaml 默认值）
 type AgentSettings struct {
-	Type         string    `json:"type"`
-	CliPath      string    `json:"cliPath"`
-	DefaultModel string    `json:"defaultModel"`
-	APIURL       string    `json:"apiUrl"`
-	APIToken     string    `json:"apiToken"`
-	SystemPrompt string    `json:"systemPrompt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	Type               string    `json:"type"`
+	CliPath            string    `json:"cliPath"`
+	DefaultModel       string    `json:"defaultModel"`
+	APIURL             string    `json:"apiUrl"`
+	APIToken           string    `json:"apiToken"`
+	SystemPrompt       string    `json:"systemPrompt"`
+	SupportsMultimodal bool      `json:"supportsMultimodal"`
+	UpdatedAt          time.Time `json:"updatedAt"`
 }
 
 // AgentProfile 一套可快速切换的 Agent / 模型配置。
@@ -420,6 +421,13 @@ type AgentProfilesSettings struct {
 	ActiveProfileID string         `json:"activeProfileId"`
 	Profiles        []AgentProfile `json:"profiles"`
 	UpdatedAt       time.Time      `json:"updatedAt"`
+}
+
+// AgentCapabilities 当前启用 Agent / 模型可安全暴露给前端的能力信息。
+type AgentCapabilities struct {
+	Type               string `json:"type"`
+	DefaultModel       string `json:"defaultModel"`
+	SupportsMultimodal bool   `json:"supportsMultimodal"`
 }
 
 // PoolSettings 坐席池运行时设置（持久化在 DB）

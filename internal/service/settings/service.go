@@ -81,14 +81,15 @@ func (s *Service) AgentSpec() agent.AgentSpec {
 		cliPath = agent.DefaultPathFor(active.Type)
 	}
 	return agent.AgentSpec{
-		Type:          active.Type,
-		CliPath:       cliPath,
-		DefaultModel:  active.DefaultModel,
-		APIURL:        active.APIURL,
-		APIToken:      active.APIToken,
-		HermesHome:    s.agentCfg.HermesHome,
-		SystemPrompt:  active.SystemPrompt,
-		PromptTimeout: s.agentCfg.PromptTimeout,
+		Type:               active.Type,
+		CliPath:            cliPath,
+		DefaultModel:       active.DefaultModel,
+		APIURL:             active.APIURL,
+		APIToken:           active.APIToken,
+		HermesHome:         s.agentCfg.HermesHome,
+		SystemPrompt:       active.SystemPrompt,
+		SupportsMultimodal: active.SupportsMultimodal,
+		PromptTimeout:      s.agentCfg.PromptTimeout,
 	}
 }
 
@@ -106,6 +107,18 @@ func (s *Service) GetAgentSettings() model.AgentSettings {
 	out := activeAgentSettings(s.agentProfiles)
 	out.APIToken = maskToken(out.APIToken)
 	return out
+}
+
+// GetAgentCapabilities 返回当前启用配置的安全能力信息，供普通用户入口做交互提示。
+func (s *Service) GetAgentCapabilities() model.AgentCapabilities {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	active := activeAgentSettings(s.agentProfiles)
+	return model.AgentCapabilities{
+		Type:               active.Type,
+		DefaultModel:       active.DefaultModel,
+		SupportsMultimodal: active.SupportsMultimodal,
+	}
 }
 
 // GetAgentProfiles 读取 Agent 配置档案（API 返回，token 脱敏）

@@ -67,6 +67,7 @@ func NewRouter(d *Deps) *gin.Engine {
 		protected.DELETE("/sessions/:id/history", d.deleteSessionHistory)
 		protected.POST("/sessions/:id/continue", d.continueSession)
 		protected.GET("/sessions", d.adminRequired(), d.listLiveSessions) // 监控页：活跃 + 排队
+		protected.GET("/agent/capabilities", d.getAgentCapabilities)
 
 		// 反馈（自学习闭环入口）
 		protected.POST("/feedback", d.submitFeedback)
@@ -790,6 +791,10 @@ func (d *Deps) listTickets(c *gin.Context) {
 
 func (d *Deps) getAgentSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, d.Settings.GetAgentProfiles())
+}
+
+func (d *Deps) getAgentCapabilities(c *gin.Context) {
+	c.JSON(http.StatusOK, d.Settings.GetAgentCapabilities())
 }
 
 func (d *Deps) updateAgentSettings(c *gin.Context) {

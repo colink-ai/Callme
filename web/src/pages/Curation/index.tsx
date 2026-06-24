@@ -3,6 +3,7 @@
 // 任何候选在通过前都不会进入生产回答链路。
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Button,
   Card,
   Checkbox,
@@ -37,6 +38,7 @@ import type {
   KnowledgePublishTarget,
   LearningJob,
   LearningJobStatus,
+  AgentCapabilities,
 } from '../../types';
 
 const { Title, Text, Paragraph } = Typography;
@@ -138,6 +140,7 @@ export default function CurationPage() {
   const [manualImages, setManualImages] = useState<ImageAttachment[]>([]);
   const [manualStreaming, setManualStreaming] = useState(false);
   const [manualStreamContent, setManualStreamContent] = useState('');
+  const [agentCapabilities, setAgentCapabilities] = useState<AgentCapabilities | null>(null);
   const runtimeEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const runtimePreviewRef = useRef<HTMLDivElement | null>(null);
 
@@ -180,6 +183,12 @@ export default function CurationPage() {
     }
     load();
   }, [canReview, candidateView, load, track]);
+
+  useEffect(() => {
+    api.getAgentCapabilities()
+      .then(setAgentCapabilities)
+      .catch(() => setAgentCapabilities(null));
+  }, []);
 
   useEffect(() => {
     if (track !== 'candidates' || candidateView !== 'jobs') return;
@@ -331,6 +340,10 @@ export default function CurationPage() {
   }, []);
 
   const addManualImage = useCallback(async (file: File) => {
+    if (agentCapabilities?.supportsMultimodal !== true) {
+      message.warning(`当前启用模型 ${agentCapabilities?.defaultModel || '未配置'} 不支持图片证据，请切换到支持多模态的模型后再上传`);
+      return false;
+    }
     if (!file.type.startsWith('image/')) {
       message.warning('只能添加图片文件');
       return false;
@@ -350,11 +363,15 @@ export default function CurationPage() {
       message.error(apiErrorMessage(err));
     }
     return false;
-  }, [fileToImageAttachment, manualImages.length]);
+  }, [agentCapabilities, fileToImageAttachment, manualImages.length]);
 
   const createManualDraft = async () => {
     if (!manualDescription.trim() && manualImages.length === 0) {
       message.warning('请先输入知识描述或上传图片');
+      return;
+    }
+    if (manualImages.length > 0 && agentCapabilities?.supportsMultimodal !== true) {
+      message.warning(`当前启用模型 ${agentCapabilities?.defaultModel || '未配置'} 不支持图片证据，请移除图片或切换模型`);
       return;
     }
     setManualStreaming(true);
@@ -484,6 +501,13 @@ export default function CurationPage() {
       <Card>
         {track === 'candidates' && candidateView === 'manual' && (
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            {agentCapabilities?.supportsMultimodal !== true && (
+              <Alert
+                type="info"
+                showIcon
+                message="当前启用模型不支持图片证据，人工录入可继续使用文字描述"
+              />
+            )}
             <Space direction="vertical" size={6} style={{ width: '100%' }}>
               <Text strong>发布目标</Text>
               <Checkbox.Group
@@ -513,7 +537,10 @@ export default function CurationPage() {
                   beforeUpload={addManualImage}
                   multiple
                 >
-                  <Button icon={<PictureOutlined />} disabled={loading || manualImages.length >= MAX_MANUAL_IMAGES}>
+                  <Button
+                    icon={<PictureOutlined />}
+                    disabled={loading || agentCapabilities?.supportsMultimodal !== true || manualImages.length >= MAX_MANUAL_IMAGES}
+                  >
                     添加图片
                   </Button>
                 </Upload>

@@ -207,7 +207,14 @@ export interface AgentSettings {
   apiUrl: string;
   apiToken: string;
   systemPrompt: string;
+  supportsMultimodal: boolean;
   updatedAt?: string;
+}
+
+export interface AgentCapabilities {
+  type: string;
+  defaultModel: string;
+  supportsMultimodal: boolean;
 }
 
 export interface AgentProfile {

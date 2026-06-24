@@ -2,6 +2,7 @@
 import axios from 'axios';
 import type {
   AgentProfilesSettings,
+  AgentCapabilities,
   CandidateAsset,
   CandidateAssetStatus,
   KnowledgePublishTarget,
@@ -100,6 +101,8 @@ export const api = {
       })),
 
   // 反馈
+  getAgentCapabilities: () =>
+    http.get<AgentCapabilities>('/agent/capabilities').then((r) => r.data),
   submitFeedback: (payload: {
     sessionId: string;
     messageId: string;

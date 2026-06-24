@@ -381,6 +381,10 @@ func (m *Manager) HandleUserMessage(ctx context.Context, sessionID, content stri
 	if err := validateImages(images); err != nil {
 		return err
 	}
+	spec := m.settings.AgentSpec()
+	if len(images) > 0 && !spec.SupportsMultimodal {
+		return fmt.Errorf("当前启用的模型不支持图片输入，请切换到支持多模态的模型后再发送图片")
+	}
 	m.mu.Lock()
 	l, ok := m.active[sessionID]
 	m.mu.Unlock()
@@ -444,8 +448,6 @@ func (m *Manager) HandleUserMessage(ctx context.Context, sessionID, content stri
 		l.sess.Title = truncate(title, 80)
 		m.store.UpdateSession(ctx, l.sess)
 	}
-
-	spec := m.settings.AgentSpec()
 
 	// 首轮注入客服系统提示词
 	input := content

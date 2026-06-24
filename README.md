@@ -4,6 +4,8 @@ Callme 是面向研发、平台和技术支持团队的智能问题解决 Agent 
 
 它不是传统意义上的客服机器人，而是一个围绕“定位问题、调用知识、给出解决步骤、沉淀经验”的工程协作入口。Callme 期望把散落在代码图谱、Wiki、历史会话、工单和专家经验里的知识串起来，让用户在遇到技术问题时能更快得到可执行的诊断与处理建议。
 
+![Callme 智能问题解决平台整体介绍](docs/blog-assets/callme-overview.png)
+
 ## 项目愿景
 
 Callme 的目标是成为企业内部的“智能问题解决层”：
@@ -27,6 +29,8 @@ Callme 的目标是成为企业内部的“智能问题解决层”：
   -> 沉淀为后续可复用知识
 ```
 
+![Callme 从提问到反馈再到知识沉淀的闭环](docs/blog-assets/callme-agent-loop.png)
+
 ## 核心功能
 
 | 能力 | 说明 |
@@ -46,9 +50,11 @@ Callme 的目标是成为企业内部的“智能问题解决层”：
 
 > 图片输入依赖底层 Agent 与模型的多模态能力。如果 Agent 的 ACP 实现暂不接受 image content block，会返回协议参数错误；此时需要切换支持图片的 Agent/模型，或在适配器中增加对应 Agent 的图片传输格式。
 
-## 技术架构
+![Callme Agent 坐席与排队机制](docs/blog-assets/callme-agent-seats.png)
 
-<img src="docs/callme-architecture.png" alt="Callme 技术架构图">
+![Callme 候选知识审批流程](docs/blog-assets/callme-knowledge-approval.png)
+
+## 技术架构
 
 ```text
 Browser (React + AntD)

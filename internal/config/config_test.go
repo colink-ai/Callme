@@ -90,6 +90,22 @@ log:
 	}
 }
 
+func TestAgentRuntimeRootDerivesDefaultDomainPaths(t *testing.T) {
+	cfg := loadTestConfig(t, `
+agent:
+  runtime_root: data/agent-runtime
+`)
+	if cfg.Agent.HermesHome != "data/agent-runtime/domains/default/home" {
+		t.Fatalf("default runtime home = %q", cfg.Agent.HermesHome)
+	}
+	if cfg.Agent.WorkDir != "data/agent-runtime/domains/default/workdir" {
+		t.Fatalf("default work dir = %q", cfg.Agent.WorkDir)
+	}
+	if got := cfg.Agent.RuntimeHomeForDomain("Ops Team!"); got != "data/agent-runtime/domains/opsteam/home" {
+		t.Fatalf("sanitized domain runtime home = %q", got)
+	}
+}
+
 func loadTestConfig(t *testing.T, body string) *Config {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")

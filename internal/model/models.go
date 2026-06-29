@@ -147,6 +147,8 @@ type Session struct {
 	ClientID       string        `json:"clientId"` // 浏览器指纹/匿名客户端标识
 	UserID         string        `json:"userId,omitempty"`
 	Username       string        `json:"username,omitempty"` // 监控视图展示字段，不持久化到 sessions 表
+	DomainID       string        `json:"domainId"`
+	DomainName     string        `json:"domainName,omitempty"`
 	Status         SessionStatus `json:"status"`
 	CreatedAt      time.Time     `json:"createdAt"`           // 进入系统（含排队）时间
 	StartedAt      *time.Time    `json:"startedAt,omitempty"` // 占用坐席（开始服务）时间
@@ -154,6 +156,34 @@ type Session struct {
 	CloseReason    CloseReason   `json:"closeReason,omitempty"`
 	Title          string        `json:"title"`                    // 首问摘要，便于监控页识别
 	AgentSessionID string        `json:"agentSessionId,omitempty"` // 底层 Agent/ACP 会话 ID，用于原生恢复
+}
+
+// Domain 业务领域。领域是知识、Runtime、会话入口的隔离单位。
+type Domain struct {
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Description      string            `json:"description,omitempty"`
+	DefaultAgentID   string            `json:"defaultAgentId,omitempty"`
+	Enabled          bool              `json:"enabled"`
+	CreatedAt        time.Time         `json:"createdAt"`
+	UpdatedAt        time.Time         `json:"updatedAt"`
+	KnowledgeSources []KnowledgeSource `json:"knowledgeSources,omitempty"`
+}
+
+// KnowledgeSource 领域知识源，当前主要承载 MCP server 配置。
+type KnowledgeSource struct {
+	ID        string            `json:"id"`
+	DomainID  string            `json:"domainId"`
+	Name      string            `json:"name"`
+	Type      string            `json:"type"` // stdio | http
+	URL       string            `json:"url,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	Command   string            `json:"command,omitempty"`
+	Args      []string          `json:"args,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+	Enabled   bool              `json:"enabled"`
+	CreatedAt time.Time         `json:"createdAt"`
+	UpdatedAt time.Time         `json:"updatedAt"`
 }
 
 // DurationSeconds 会话已服务时长（秒）

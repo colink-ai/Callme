@@ -9,6 +9,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Select,
   Space,
   Spin,
   Tag,
@@ -50,7 +51,7 @@ import remarkGfm from 'remark-gfm';
 import dayjs from 'dayjs';
 import { useChatStore, toChatMessage, type AgentStep, type ChatMessage } from '../../store/chatStore';
 import { api, apiErrorMessage } from '../../api/client';
-import type { AgentCapabilities, ImageAttachment, Session } from '../../types';
+import type { AgentCapabilities, Domain, ImageAttachment, Session } from '../../types';
 import { LogoIcon } from '../../components/Logo';
 import HermesIcon from '../../components/HermesIcon';
 
@@ -505,6 +506,8 @@ export default function ChatPage() {
 
   // 历史会话栏 + 只读查看
   const [historySessions, setHistorySessions] = useState<Session[]>([]);
+  const [domains, setDomains] = useState<Domain[]>([]);
+  const [selectedDomainId, setSelectedDomainId] = useState(localStorage.getItem('callme_domain_id') || 'default');
   const [viewing, setViewing] = useState<{ session: Session; messages: ChatMessage[] } | null>(null);
   // 左侧历史栏收起状态（持久化，记住用户偏好）
   const [historyCollapsed, setHistoryCollapsed] = useState(
@@ -525,6 +528,17 @@ export default function ChatPage() {
   useEffect(() => {
     loadHistory();
   }, []);
+  useEffect(() => {
+    api.listDomains()
+      .then((items) => {
+        setDomains(items);
+        if (items.length > 0 && !items.some((item) => item.id === selectedDomainId)) {
+          setSelectedDomainId(items[0].id);
+          localStorage.setItem('callme_domain_id', items[0].id);
+        }
+      })
+      .catch(() => setDomains([]));
+  }, [selectedDomainId]);
   // 当前会话状态变化（新建/结束）时刷新历史列表
   useEffect(() => {
     loadHistory();
@@ -718,7 +732,7 @@ export default function ChatPage() {
 
   const restartClosedSession = async () => {
     if (!session) {
-      startSession();
+      startSession(selectedDomainId);
       return;
     }
     try {
@@ -762,10 +776,10 @@ export default function ChatPage() {
           onSelect={openHistory}
           onContinue={continueHistory}
           onDelete={deleteHistory}
-          onNew={() => {
-            setViewing(null);
-            if (!active && !queued && !connecting) startSession();
-          }}
+	          onNew={() => {
+	            setViewing(null);
+	            if (!active && !queued && !connecting) startSession(selectedDomainId);
+	          }}
           onCollapse={() => toggleHistory(true)}
           starting={starting}
         />
@@ -801,6 +815,21 @@ export default function ChatPage() {
               <Space>
                 <CustomerServiceOutlined style={{ fontSize: 20, color: 'var(--color-primary)' }} />
                 <Title level={4} style={{ margin: 0 }}>智能问答</Title>
+                {domains.length > 0 && !active && !queued && !connecting && (
+                  <Select
+                    size="small"
+                    value={selectedDomainId}
+                    style={{ minWidth: 140 }}
+                    options={domains.map((d) => ({ value: d.id, label: d.name }))}
+                    onChange={(value) => {
+                      setSelectedDomainId(value);
+                      localStorage.setItem('callme_domain_id', value);
+                    }}
+                  />
+                )}
+                {session?.domainId && (
+                  <Tag>{domains.find((d) => d.id === session.domainId)?.name || session.domainId}</Tag>
+                )}
               </Space>
               {active && session?.startedAt && (
                 <Space>
@@ -839,7 +868,7 @@ export default function ChatPage() {
                       <Text type="secondary">{starting ? '正在创建会话…' : '正在恢复会话…'}</Text>
                     </Space>
                   ) : (
-                    <Button type="primary" size="large" loading={starting} disabled={starting} onClick={startSession}>开始会话</Button>
+                    <Button type="primary" size="large" loading={starting} disabled={starting} onClick={() => startSession(selectedDomainId)}>开始会话</Button>
                   )}
                 </div>
               )}

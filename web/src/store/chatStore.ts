@@ -32,7 +32,7 @@ interface ChatState {
   error: string | null;
 
   restoreSession: () => Promise<void>;
-  startSession: () => Promise<void>;
+  startSession: (domainId?: string) => Promise<void>;
   continueSession: (sessionId: string) => Promise<void>;
   sendMessage: (content: string, images?: ImageAttachment[]) => void;
   stopGeneration: () => void;
@@ -115,7 +115,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  startSession: async () => {
+  startSession: async (domainId?: string) => {
     if (get().starting) return;
     const current = get().session;
     const canReuseCurrent = current && current.status !== 'closed' && !get().closedReason && get().connected;
@@ -136,7 +136,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return;
       }
 
-      const view = await api.createSession();
+      const view = await api.createSession(domainId);
       set({ session: view, position: view.position ?? 0, queueLen: view.queueLen ?? 0 });
       connectWS(view.id, set, get);
     } catch (err) {

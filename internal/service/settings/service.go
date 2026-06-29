@@ -11,6 +11,7 @@ import (
 	"callme/internal/model"
 	"callme/internal/repo"
 	"callme/internal/service/agent"
+	runtimeSvc "callme/internal/service/runtime"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -78,15 +79,17 @@ func (s *Service) AgentSpec() agent.AgentSpec {
 	active := activeAgentSettings(s.agentProfiles)
 	cliPath := active.CliPath
 	if cliPath == "" {
-		cliPath = agent.DefaultPathFor(active.Type)
+		cliPath = defaultPathFor(active.Type)
 	}
+	runtimeHome := s.agentCfg.RuntimeHomeForDomain(config.DefaultDomainID)
 	return agent.AgentSpec{
 		Type:               active.Type,
 		CliPath:            cliPath,
 		DefaultModel:       active.DefaultModel,
 		APIURL:             active.APIURL,
 		APIToken:           active.APIToken,
-		HermesHome:         s.agentCfg.HermesHome,
+		RuntimeHome:        runtimeHome,
+		HermesHome:         runtimeHome,
 		SystemPrompt:       active.SystemPrompt,
 		SupportsMultimodal: active.SupportsMultimodal,
 		PromptTimeout:      s.agentCfg.PromptTimeout,
@@ -141,7 +144,7 @@ func (s *Service) UpdateAgentSettings(ctx context.Context, in model.AgentSetting
 		in.Type = current.Type
 	}
 	if in.CliPath == "" {
-		in.CliPath = agent.DefaultPathFor(in.Type)
+		in.CliPath = defaultPathFor(in.Type)
 		if in.CliPath == "" && in.Type == current.Type {
 			in.CliPath = current.CliPath
 		}
@@ -245,10 +248,10 @@ func defaultAgentProfiles(agentCfg config.AgentConfig) model.AgentProfilesSettin
 
 func profilesFromAgentSettings(settings model.AgentSettings) model.AgentProfilesSettings {
 	if settings.Type == "" {
-		settings.Type = "hermes"
+		settings.Type = runtimeSvc.TypeHermes
 	}
 	if settings.CliPath == "" {
-		settings.CliPath = agent.DefaultPathFor(settings.Type)
+		settings.CliPath = defaultPathFor(settings.Type)
 	}
 	settings.UpdatedAt = time.Now()
 	return model.AgentProfilesSettings{
@@ -268,7 +271,7 @@ func normalizeAgentProfiles(in model.AgentProfilesSettings, fallback model.Agent
 		out = fallback
 	}
 	if len(out.Profiles) == 0 {
-		out = profilesFromAgentSettings(model.AgentSettings{Type: "hermes", CliPath: agent.DefaultPathFor("hermes")})
+		out = profilesFromAgentSettings(model.AgentSettings{Type: runtimeSvc.TypeHermes, CliPath: defaultPathFor(runtimeSvc.TypeHermes)})
 	}
 	seen := map[string]bool{}
 	for i := range out.Profiles {
@@ -296,10 +299,10 @@ func normalizeAgentSettings(in model.AgentSettings, old model.AgentSettings) mod
 		in.Type = old.Type
 	}
 	if in.Type == "" {
-		in.Type = "hermes"
+		in.Type = runtimeSvc.TypeHermes
 	}
 	if in.CliPath == "" {
-		in.CliPath = agent.DefaultPathFor(in.Type)
+		in.CliPath = defaultPathFor(in.Type)
 		if in.CliPath == "" && in.Type == old.Type {
 			in.CliPath = old.CliPath
 		}
@@ -311,6 +314,13 @@ func normalizeAgentSettings(in model.AgentSettings, old model.AgentSettings) mod
 		in.UpdatedAt = time.Now()
 	}
 	return in
+}
+
+func defaultPathFor(agentType string) string {
+	if agentType == "" || agentType == runtimeSvc.TypeHermes {
+		return "hermes"
+	}
+	return ""
 }
 
 func activeAgentSettings(profiles model.AgentProfilesSettings) model.AgentSettings {

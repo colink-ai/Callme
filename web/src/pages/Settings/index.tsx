@@ -285,7 +285,7 @@ export default function SettingsPage() {
               name="profileName"
               rules={[{ required: true, message: '请输入配置名称' }]}
             >
-              <Input placeholder="如：生产 GLM、测试 OpenCode、备用 Claude" />
+              <Input placeholder="如：生产 Hermes、测试多模、备用模型" />
             </Form.Item>
             <Space size="large" wrap>
               <Form.Item label="Agent 类型" name="type" style={{ minWidth: 200 }}>

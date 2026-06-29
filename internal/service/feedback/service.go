@@ -133,7 +133,7 @@ func (s *Service) distillLoop() {
 }
 
 func (s *Service) auditLoop() {
-	if s.runtimeHome == "" {
+	if s.currentRuntimeHome() == "" {
 		return
 	}
 	if err := s.auditRuntimeLearning(context.Background()); err != nil {
@@ -199,7 +199,11 @@ func (s *Service) auditRuntimeLearning(ctx context.Context) error {
 	if provider == nil {
 		return nil
 	}
-	current, err := provider.Scan(s.runtimeHome)
+	runtimeHome := s.currentRuntimeHome()
+	if runtimeHome == "" {
+		return nil
+	}
+	current, err := provider.Scan(runtimeHome)
 	if err != nil {
 		return err
 	}
@@ -871,10 +875,14 @@ func (s *Service) publishApproved(a *model.CandidateAsset) error {
 }
 
 func (s *Service) publishApprovedLocal(a *model.CandidateAsset) error {
-	if err := os.MkdirAll(s.runtimeHome, 0o755); err != nil {
+	runtimeHome := s.currentRuntimeHome()
+	if runtimeHome == "" {
+		return fmt.Errorf("未配置 Agent Runtime 工作目录")
+	}
+	if err := os.MkdirAll(runtimeHome, 0o755); err != nil {
 		return err
 	}
-	path := filepath.Join(s.runtimeHome, ApprovedFileName)
+	path := filepath.Join(runtimeHome, ApprovedFileName)
 	existing, _ := os.ReadFile(path)
 	content := string(existing)
 	if content == "" {
@@ -891,11 +899,15 @@ func (s *Service) publishApprovedLocal(a *model.CandidateAsset) error {
 }
 
 func (s *Service) publishApprovedSkill(a *model.CandidateAsset) error {
+	runtimeHome := s.currentRuntimeHome()
+	if runtimeHome == "" {
+		return fmt.Errorf("未配置 Agent Runtime 工作目录")
+	}
 	name := knowledgeSlug(a.Title)
 	if name == "" {
 		name = a.ID
 	}
-	dir := filepath.Join(s.runtimeHome, "skills", "callme-approved", name)
+	dir := filepath.Join(runtimeHome, "skills", "callme-approved", name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -934,7 +946,24 @@ func (s *Service) findUserQuestion(ctx context.Context, assistantMsg *model.Mess
 
 // ApprovedPath 正式知识文件路径（注入系统提示词用）
 func (s *Service) ApprovedPath() string {
-	return filepath.Join(s.runtimeHome, ApprovedFileName)
+	runtimeHome := s.currentRuntimeHome()
+	if runtimeHome == "" {
+		return ""
+	}
+	return filepath.Join(runtimeHome, ApprovedFileName)
+}
+
+func (s *Service) currentRuntimeHome() string {
+	if s.agentSpec != nil {
+		spec := s.agentSpec()
+		if spec.RuntimeHome != "" {
+			return spec.RuntimeHome
+		}
+		if spec.HermesHome != "" {
+			return spec.HermesHome
+		}
+	}
+	return s.runtimeHome
 }
 
 // ReadApproved 读取当前正式知识内容

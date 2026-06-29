@@ -8,6 +8,8 @@ import type {
   KnowledgePublishTarget,
   DailyPoint,
   HotQuestion,
+  Domain,
+  KnowledgeSource,
   RuntimeLearningAsset,
   RuntimeLearningStatus,
   LearningJob,
@@ -60,8 +62,8 @@ export const api = {
   deleteUser: (id: string) => http.delete(`/users/${id}`),
 
   // 会话
-  createSession: () =>
-    http.post<SessionView>('/sessions', undefined, { timeout: 90000 }).then((r) => r.data),
+  createSession: (domainId?: string) =>
+    http.post<SessionView>('/sessions', { domainId }, { timeout: 90000 }).then((r) => r.data),
   getCurrentSession: () =>
     http
       .get<{ session: SessionView | null }>('/sessions/current')
@@ -99,6 +101,17 @@ export const api = {
         page: r.data.page,
         pageSize: r.data.pageSize,
       })),
+
+  // 领域
+  listDomains: (includeDisabled = false) =>
+    http.get<{ domains: Domain[] | null }>('/domains', { params: includeDisabled ? { includeDisabled: true } : {} })
+      .then((r) => r.data.domains ?? []),
+  getDomain: (id: string) => http.get<Domain>(`/domains/${id}`).then((r) => r.data),
+  upsertDomain: (domain: Domain) => http.put<Domain>(`/domains/${domain.id}`, domain).then((r) => r.data),
+  upsertKnowledgeSource: (domainId: string, source: KnowledgeSource) =>
+    http.put<Domain>(`/domains/${domainId}/sources/${source.id || 'new'}`, source).then((r) => r.data),
+  deleteKnowledgeSource: (domainId: string, sourceId: string) =>
+    http.delete<Domain>(`/domains/${domainId}/sources/${sourceId}`).then((r) => r.data),
 
   // 反馈
   getAgentCapabilities: () =>

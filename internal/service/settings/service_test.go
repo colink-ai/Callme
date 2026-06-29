@@ -146,3 +146,27 @@ func TestPoolSettingsUpdateAndDefaults(t *testing.T) {
 		t.Fatalf("reloaded pool = %+v", pool)
 	}
 }
+
+func TestAgentSpecUsesRuntimeRootDefaultDomain(t *testing.T) {
+	db, err := repo.Open("sqlite", filepath.Join(t.TempDir(), "settings.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := repo.NewStore(db)
+	agentCfg := config.AgentConfig{
+		Type:        "hermes",
+		CliPath:     "hermes",
+		RuntimeRoot: filepath.Join(t.TempDir(), "runtime"),
+	}
+	agentCfg.HermesHome = agentCfg.RuntimeHomeForDomain(config.DefaultDomainID)
+	agentCfg.WorkDir = agentCfg.WorkDirForDomain(config.DefaultDomainID)
+	svc := NewService(store, agentCfg, config.SessionConfig{}, zap.NewNop())
+	spec := svc.AgentSpec()
+	if spec.RuntimeHome == "" || spec.RuntimeHome != spec.HermesHome {
+		t.Fatalf("runtime home should be mirrored for compatibility, spec=%+v", spec)
+	}
+	if want := filepath.Join(agentCfg.RuntimeRoot, "domains", "default", "home"); spec.RuntimeHome != want {
+		t.Fatalf("runtime home = %q, want %q", spec.RuntimeHome, want)
+	}
+}

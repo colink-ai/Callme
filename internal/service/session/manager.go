@@ -108,13 +108,19 @@ type SettingsProvider interface {
 	PoolSettings() model.PoolSettings
 }
 
+// AdapterFactory creates a runtime adapter for the active AgentSpec. Concrete
+// agent adapters are owned by Helios; Callme injects this factory from its
+// runtime integration layer.
+type AdapterFactory func(agent.AgentSpec) (agent.Adapter, error)
+
 // Manager 会话管理器
 type Manager struct {
 	cfg      config.SessionConfig
 	agentCfg config.AgentConfig
 	store    *repo.Store
 	settings SettingsProvider
-	mcpSpecs func() []agent.MCPServerSpec
+	adapters AdapterFactory
+	mcpSpecs func(domainID string) []agent.MCPServerSpec
 	logger   *zap.Logger
 
 	active map[string]*live
@@ -130,7 +136,8 @@ func NewManager(
 	agentCfg config.AgentConfig,
 	store *repo.Store,
 	settings SettingsProvider,
-	mcpSpecs func() []agent.MCPServerSpec,
+	adapters AdapterFactory,
+	mcpSpecs func(domainID string) []agent.MCPServerSpec,
 	logger *zap.Logger,
 ) *Manager {
 	m := &Manager{
@@ -138,6 +145,7 @@ func NewManager(
 		agentCfg:    agentCfg,
 		store:       store,
 		settings:    settings,
+		adapters:    adapters,
 		mcpSpecs:    mcpSpecs,
 		logger:      logger,
 		active:      make(map[string]*live),
@@ -163,7 +171,14 @@ func (m *Manager) Shutdown() {
 
 // CreateSession 创建会话：占座成功直接激活，否则普通用户排队；VIP 不受排队约束。
 func (m *Manager) CreateSession(ctx context.Context, user *model.User) (*SessionView, error) {
-	return m.createSession(ctx, user, "")
+	return m.CreateSessionInDomain(ctx, user, config.DefaultDomainID)
+}
+
+func (m *Manager) CreateSessionInDomain(ctx context.Context, user *model.User, domainID string) (*SessionView, error) {
+	if domainID == "" {
+		domainID = config.DefaultDomainID
+	}
+	return m.createSession(ctx, user, domainID, "")
 }
 
 // ContinueSession 复用已结束的历史会话记录。历史上下文只通过 Agent 原生 resume 恢复，不注入 Prompt。
@@ -246,7 +261,7 @@ func (m *Manager) ContinueSession(ctx context.Context, user *model.User, source 
 	return v, nil
 }
 
-func (m *Manager) createSession(ctx context.Context, user *model.User, title string) (*SessionView, error) {
+func (m *Manager) createSession(ctx context.Context, user *model.User, domainID, title string) (*SessionView, error) {
 	pool := m.settings.PoolSettings()
 	userID := user.ID
 
@@ -279,6 +294,7 @@ func (m *Manager) createSession(ctx context.Context, user *model.User, title str
 		ID:        uuid.New().String(),
 		ClientID:  userID,
 		UserID:    userID,
+		DomainID:  domainID,
 		Status:    model.SessionStatusQueued,
 		CreatedAt: now,
 		Title:     title,
@@ -323,17 +339,25 @@ func (m *Manager) createSession(ctx context.Context, user *model.User, title str
 // activate 占座会话：启动 Hermes 进程并标记 active
 func (m *Manager) activate(l *live) error {
 	spec := m.settings.AgentSpec()
+	domainID := l.sess.DomainID
+	if domainID == "" {
+		domainID = config.DefaultDomainID
+		l.sess.DomainID = domainID
+	}
+	runtimeHome := m.agentCfg.RuntimeHomeForDomain(domainID)
+	spec.RuntimeHome = runtimeHome
+	spec.HermesHome = runtimeHome
 	if spec.DefaultModel == "" {
 		m.evict(l.sess.ID)
 		return fmt.Errorf("请先在设置中配置 Agent 模型")
 	}
-	adapter := agent.GetAdapter(spec.Type)
-	if adapter == nil {
+	adapter, err := m.adapters(spec)
+	if err != nil {
 		m.evict(l.sess.ID)
-		return fmt.Errorf("未注册的 Agent 类型: %s", spec.Type)
+		return err
 	}
 
-	workDir := filepath.Join(m.agentCfg.WorkDir, l.sess.ID)
+	workDir := filepath.Join(m.agentCfg.WorkDirForDomain(domainID), l.sess.ID)
 	if absWorkDir, err := filepath.Abs(workDir); err == nil {
 		workDir = absWorkDir
 	}
@@ -341,7 +365,7 @@ func (m *Manager) activate(l *live) error {
 	req := &agent.SessionRequest{
 		Spec:            spec,
 		WorkDir:         workDir,
-		MCPServers:      m.mcpSpecs(),
+		MCPServers:      m.mcpSpecs(domainID),
 		ResumeSessionID: l.sess.AgentSessionID,
 	}
 

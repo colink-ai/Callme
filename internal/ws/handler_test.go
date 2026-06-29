@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -51,22 +50,9 @@ func (wsSettings) PoolSettings() model.PoolSettings {
 	return model.PoolSettings{MaxActive: 2, MaxQueue: 2}
 }
 
-var registerWSFakeOnce sync.Once
-
-func registerWSFakeAgent() {
-	registerWSFakeOnce.Do(func() {
-		agent.RegisterPlugin(agent.PluginMeta{
-			Type:    "ws_fake",
-			Name:    "WS Fake",
-			Factory: func() agent.Adapter { return wsFakeAdapter{} },
-		})
-	})
-}
-
 func newWSTestHarness(t *testing.T) (*gin.Engine, *session.Manager, *auth.Service, *repo.Store) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	registerWSFakeAgent()
 
 	dir := t.TempDir()
 	db, err := repo.Open("sqlite", filepath.Join(dir, "ws.db"))
@@ -86,7 +72,8 @@ func newWSTestHarness(t *testing.T) (*gin.Engine, *session.Manager, *auth.Servic
 		config.AgentConfig{WorkDir: filepath.Join(dir, "workdir"), HermesHome: filepath.Join(dir, "home")},
 		store,
 		wsSettings{},
-		func() []agent.MCPServerSpec { return nil },
+		func(agent.AgentSpec) (agent.Adapter, error) { return wsFakeAdapter{}, nil },
+		func(domainID string) []agent.MCPServerSpec { return nil },
 		zap.NewNop(),
 	)
 	t.Cleanup(func() {

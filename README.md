@@ -11,7 +11,8 @@ Callme 是面向研发、平台和技术支持团队的智能问题解决 Agent 
 Callme 的目标是成为企业内部的“智能问题解决层”：
 
 - 面向真实技术问题，而不是只做 FAQ 匹配。
-- 通过 Agent Runtime 接入不同 Agent 类型，例如 Hermes、OpenCode 或 Mock Agent。
+- 通过 Agent Runtime 接入 Hermes，并保留按插件扩展其他 Agent 的运行时边界。
+- 底层 Agent 适配器由 Helios 承担，Callme 只负责业务会话、设置、落库和事件展示。
 - 通过 MCP 接入知识库、代码图谱、Wiki 图谱等外部知识源。
 - 通过用户反馈、纠错和历史工单沉淀组织经验。
 - 通过坐席制并发控制，让 Agent 资源像人工坐席一样可管理、可排队、可监控。
@@ -36,7 +37,7 @@ Callme 的目标是成为企业内部的“智能问题解决层”：
 | 能力 | 说明 |
 | :-- | :-- |
 | 智能问答 | 基于常驻 Agent 会话提供多轮问答、流式输出、执行过程展示 |
-| Agent Runtime | 支持多 Agent 类型配置，当前包含 Hermes、OpenCode、Mock Agent |
+| Agent Runtime | 当前支持 Hermes 常驻会话，内部通过 Helios 运行时处理 ACP 生命周期和事件流；后续 Agent 在 Helios 层扩展 |
 | 模型配置 | 管理员在设置页维护 Agent 类型、CLI 路径、模型、API Base URL、Token、系统提示词 |
 | 知识库接入 | 通过 MCP 接入代码图谱、Wiki 图谱等知识源，回答中展示引用来源 |
 | 图片输入 | 支持选择、粘贴、拖拽图片并通过 ACP 多模态内容块转发给 Agent |
@@ -63,7 +64,8 @@ Browser (React + AntD)
 Go Server (Gin)
   |-- auth       登录、Token、角色权限
   |-- session    坐席池、排队、会话生命周期、WebSocket 推送
-  |-- agent      Agent 注册中心、Runtime Spec、ACP 适配层
+  |-- agent      Callme 内部 Agent DTO / Chunk / Spec 类型
+  |-- runtime    Helios Runtime 集成层
   |-- feedback   用户反馈、候选知识审批、Hermes 自学习审计
   |-- handoff    转人工工单
   |-- stats      看板统计
@@ -73,8 +75,7 @@ SQLite (data/callme.db)
 
 Agent Runtime
   |-- Hermes ACP
-  |-- OpenCode ACP
-  |-- Mock Agent
+  |-- Future Helios Adapters
 
 MCP Knowledge Sources
   |-- code-graph
@@ -93,7 +94,8 @@ configs/config.yaml.example 服务启动配置模板
 internal/api               HTTP API
 internal/repo              SQLite 访问与 goose 迁移
 internal/service           业务服务
-internal/service/agent     Agent Runtime 抽象与插件
+internal/service/agent     Callme 内部 Agent DTO / Chunk / Spec 类型
+internal/service/runtime   Helios Runtime 集成层
 internal/ws                WebSocket 处理
 scripts/                   启停、打包、升级脚本
 tools/wsprobe              WebSocket 冒烟工具
@@ -106,7 +108,7 @@ web/                       React 前端
 
 - Go 1.25+
 - Node.js 20+
-- Hermes CLI 或其他可用 Agent CLI
+- Hermes CLI
 - 如使用 Hermes MCP，Hermes 运行环境需要安装 `mcp` Python SDK：
 
 ```bash
@@ -182,17 +184,14 @@ agent:
 
 ### Agent 类型
 
-Callme 通过 Agent Runtime 抽象管理不同 Agent 类型。设置页中的 Agent 类型来自后端注册表。当前主要类型：
+Callme 通过 Helios Runtime 管理底层 Agent。设置页中的 Agent 类型来自 Callme 的 runtime 集成层；当前只暴露 Hermes，其他 Agent 应先在 Helios 中实现或引入 adapter，再由 Callme 升级依赖并决定是否开放：
 
-- `hermes`：通过 ACP 协议接入 Hermes。
-- `open_code`：通过 ACP 方式接入 OpenCode。
-- `mock`：本地测试用。
+- `hermes`：通过 Helios Runtime + ACP 协议接入 Hermes，支持常驻会话、resume、流式事件和多模态内容转发。
 
 前端展示时使用平台名称“Callme 助手”，同时在回复标签中展示真实 Agent 类型和模型，例如：
 
 ```text
 Hermes · glm-5
-OpenCode · <model>
 ```
 
 ### MCP 知识源
@@ -296,12 +295,10 @@ internal/repo/migrations/
 
 新增 Agent 时建议：
 
-1. 在 `internal/service/agent/plugins/<agent>` 下实现适配器。
-2. 复用 `agent.Adapter` 接口，保持 `StartSession -> Prompt -> StopSession` 生命周期。
-3. 如果是 ACP Agent，优先复用 ACP 基础适配器。
-4. 在插件注册表中注册 Agent 类型、显示名和默认 CLI 路径。
-5. 补充设置页显示与健康检查。
-6. 明确是否支持原生 resume、图片、多模态、MCP。
+1. 在 Helios 中实现或引入对应 adapter，复用 Helios 的 runtime.Adapter / ACP 基础能力。
+2. 在 Helios 侧完成协议事件解析、resume、权限、多模态、MCP、健康检查等运行时能力。
+3. Callme 升级 Helios 依赖，在 `internal/service/runtime` 中开放该 Agent 类型、默认 CLI 路径和健康检查入口。
+4. Callme 继续只负责设置页、领域隔离、会话落库、WebSocket 展示和业务审计。
 
 ### Agent MCP 知识源
 
@@ -406,8 +403,8 @@ npm run build --prefix web
 
 ## 仍需关注
 
-- 图片输入需要逐个 Agent 验证协议格式与模型能力。
-- Hermes / OpenCode 的原生 resume 行为需要继续回归测试。
+- 图片输入需要持续验证 Hermes ACP 协议格式与模型能力。
+- Hermes 原生 resume 行为需要继续回归测试。
 - 生产知识库 MCP 的鉴权、超时、重试、健康检查策略需要和企业内网环境对齐。
 - 内网部署如出现 Agent 回答中途停止，优先检查 `agent.prompt_timeout`、反向代理 WebSocket 超时和模型网关超时。
 - `data/hermes-home` 可能包含敏感信息，备份和升级目录需要配置合适的文件权限。

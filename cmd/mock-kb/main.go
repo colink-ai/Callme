@@ -38,14 +38,14 @@ var codeKB = []kbEntry{
 		Keywords: []string{"设置", "SQLite", "settings", "模型", "坐席", "agent_settings", "pool_settings"},
 	},
 	{
-		Title:    "Hermes 本地配置 internal/service/agent/plugins/hermes/adapter.go",
+		Title:    "Helios 运行时集成 internal/service/runtime/helios.go",
 		Content:  "Hermes 启动前会读取并更新 HERMES_HOME/config.yaml，只覆盖 model 配置，并在存在知识源声明时同步 mcp_servers。当前 HERMES_HOME 来自 agent.hermes_home，默认是项目内 data/hermes-home，不是用户机器的 ~/.hermes。Hermes 通过本地 mcp_servers 连接知识库 MCP。",
-		Keywords: []string{"Hermes", "HERMES_HOME", "config.yaml", "mcp_servers", "模型", "本地配置"},
+		Keywords: []string{"Hermes", "Helios", "HERMES_HOME", "config.yaml", "mcp_servers", "模型", "本地配置"},
 	},
 	{
-		Title:    "ACP 会话协议 internal/service/agent/plugins/acp/adapter.go",
-		Content:  "Callme 仍使用 ACP 与 Hermes/OpenCode 建立常驻 Agent 会话，但已去除通过 ACP session/new 或 session/resume 传递 mcpServers 的方式。ACP 请求现在只传 cwd/sessionId 等会话参数；知识库 MCP 由具体 Agent 的本地配置机制负责。",
-		Keywords: []string{"ACP", "mcpServers", "session/new", "session/resume", "Hermes", "OpenCode"},
+		Title:    "ACP 会话协议由 Helios 负责",
+		Content:  "Callme 当前通过 Helios Runtime 与 Hermes ACP 建立常驻 Agent 会话。自定义 Agent 应在 Helios 层实现 adapter；Callme 只负责设置、领域隔离、会话落库、WebSocket 推送和业务审计。",
+		Keywords: []string{"ACP", "mcpServers", "session/new", "session/resume", "Hermes", "Helios"},
 	},
 	{
 		Title:    "知识库 MCP 配置",

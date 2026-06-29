@@ -16,12 +16,14 @@ import (
 	"callme/internal/service/auth"
 	"callme/internal/service/feedback"
 	"callme/internal/service/handoff"
+	runtimeSvc "callme/internal/service/runtime"
 	"callme/internal/service/session"
 	"callme/internal/service/settings"
 	"callme/internal/service/stats"
 	"callme/internal/ws"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -30,6 +32,7 @@ type Deps struct {
 	Store    *repo.Store
 	Sessions *session.Manager
 	Settings *settings.Service
+	Runtime  RuntimeProvider
 	Auth     *auth.Service
 	Feedback *feedback.Service
 	Handoff  *handoff.Service
@@ -38,6 +41,11 @@ type Deps struct {
 	Logger   *zap.Logger
 	WebDist  string // 前端构建产物目录（为空则不挂载）
 	Version  string // 应用版本号
+}
+
+type RuntimeProvider interface {
+	Types() []runtimeSvc.AgentType
+	CheckHealth(ctx context.Context, spec agent.AgentSpec) error
 }
 
 // NewRouter 构建 Gin 路由
@@ -68,6 +76,11 @@ func NewRouter(d *Deps) *gin.Engine {
 		protected.POST("/sessions/:id/continue", d.continueSession)
 		protected.GET("/sessions", d.adminRequired(), d.listLiveSessions) // 监控页：活跃 + 排队
 		protected.GET("/agent/capabilities", d.getAgentCapabilities)
+		protected.GET("/domains", d.listDomains)
+		protected.GET("/domains/:id", d.getDomain)
+		protected.PUT("/domains/:id", d.adminRequired(), d.upsertDomain)
+		protected.PUT("/domains/:id/sources/:sourceId", d.adminRequired(), d.upsertKnowledgeSource)
+		protected.DELETE("/domains/:id/sources/:sourceId", d.adminRequired(), d.deleteKnowledgeSource)
 
 		// 反馈（自学习闭环入口）
 		protected.POST("/feedback", d.submitFeedback)
@@ -275,7 +288,19 @@ func (d *Deps) me(c *gin.Context) {
 // ---------- 会话 ----------
 
 func (d *Deps) createSession(c *gin.Context) {
-	view, err := d.Sessions.CreateSession(c.Request.Context(), currentUser(c))
+	var req struct {
+		DomainID string `json:"domainId"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	if req.DomainID == "" {
+		req.DomainID = "default"
+	}
+	domain, err := d.Store.GetDomain(c.Request.Context(), req.DomainID)
+	if err != nil || !domain.Enabled {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "领域不存在或已停用"})
+		return
+	}
+	view, err := d.Sessions.CreateSessionInDomain(c.Request.Context(), currentUser(c), req.DomainID)
 	if err != nil {
 		var limitErr *session.UserConcurrencyError
 		if errors.As(err, &limitErr) {
@@ -295,6 +320,84 @@ func (d *Deps) createSession(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, view)
+}
+
+func (d *Deps) listDomains(c *gin.Context) {
+	includeDisabled := currentRole(c) == model.UserRoleAdmin && c.Query("includeDisabled") == "true"
+	domains, err := d.Store.ListDomains(c.Request.Context(), includeDisabled)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"domains": domains})
+}
+
+func (d *Deps) getDomain(c *gin.Context) {
+	domain, err := d.Store.GetDomain(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "领域不存在"})
+		return
+	}
+	if !domain.Enabled && currentRole(c) != model.UserRoleAdmin {
+		c.JSON(http.StatusNotFound, gin.H{"error": "领域不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, domain)
+}
+
+func (d *Deps) upsertDomain(c *gin.Context) {
+	var req model.Domain
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	req.ID = strings.TrimSpace(c.Param("id"))
+	if req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "领域名称不能为空"})
+		return
+	}
+	if err := d.Store.UpsertDomain(c.Request.Context(), &req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	domain, _ := d.Store.GetDomain(c.Request.Context(), req.ID)
+	c.JSON(http.StatusOK, domain)
+}
+
+func (d *Deps) upsertKnowledgeSource(c *gin.Context) {
+	var req model.KnowledgeSource
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	req.DomainID = strings.TrimSpace(c.Param("id"))
+	req.ID = strings.TrimSpace(c.Param("sourceId"))
+	if req.ID == "new" || req.ID == "" {
+		req.ID = uuid.NewString()
+	}
+	if req.Name == "" || req.Type == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "知识源名称和类型不能为空"})
+		return
+	}
+	if _, err := d.Store.GetDomain(c.Request.Context(), req.DomainID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "领域不存在"})
+		return
+	}
+	if err := d.Store.UpsertKnowledgeSource(c.Request.Context(), &req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	domain, _ := d.Store.GetDomain(c.Request.Context(), req.DomainID)
+	c.JSON(http.StatusOK, domain)
+}
+
+func (d *Deps) deleteKnowledgeSource(c *gin.Context) {
+	if err := d.Store.DeleteKnowledgeSource(c.Request.Context(), c.Param("sourceId")); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	domain, _ := d.Store.GetDomain(c.Request.Context(), c.Param("id"))
+	c.JSON(http.StatusOK, domain)
 }
 
 func (d *Deps) currentSession(c *gin.Context) {
@@ -843,17 +946,12 @@ func (d *Deps) updatePoolSettings(c *gin.Context) {
 }
 
 func (d *Deps) getAgentTypes(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"types": agent.GetTypes()})
+	c.JSON(http.StatusOK, gin.H{"types": d.Runtime.Types()})
 }
 
 func (d *Deps) checkAgentHealth(c *gin.Context) {
 	spec := d.Settings.AgentSpec()
-	adapter := agent.GetAdapter(spec.Type)
-	if adapter == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "未注册的 Agent 类型: " + spec.Type})
-		return
-	}
-	if err := adapter.CheckHealth(c.Request.Context(), spec); err != nil {
+	if err := d.Runtime.CheckHealth(c.Request.Context(), spec); err != nil {
 		c.JSON(http.StatusOK, gin.H{"healthy": false, "error": err.Error()})
 		return
 	}

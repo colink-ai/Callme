@@ -19,14 +19,11 @@ import (
 	"callme/internal/service/auth"
 	"callme/internal/service/feedback"
 	"callme/internal/service/handoff"
+	runtimeSvc "callme/internal/service/runtime"
 	"callme/internal/service/session"
 	"callme/internal/service/settings"
 	"callme/internal/service/stats"
 	"callme/internal/ws"
-
-	// 注册 Agent 插件
-	_ "callme/internal/service/agent/plugins/hermes"
-	_ "callme/internal/service/agent/plugins/open_code"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -81,7 +78,6 @@ func main() {
 		os.Exit(1)
 	}
 	defer logger.Sync()
-	agent.SetLogger(logger)
 
 	// Gin：生产模式（关闭 [GIN-debug] 控制台输出），并把 gin 的输出接到统一日志落点
 	gin.SetMode(gin.ReleaseMode)
@@ -97,14 +93,37 @@ func main() {
 		zap.String("appVersion", version),
 		zap.Int("schemaVersion", repo.SchemaVersion(db)))
 	store := repo.NewStore(db)
+	if err := store.EnsureDefaultDomain(context.Background()); err != nil {
+		logger.Warn("ensure default domain failed", zap.Error(err))
+	}
 	if err := store.CloseUnfinishedSessions(context.Background(), model.CloseReasonError); err != nil {
 		logger.Warn("close unfinished sessions failed", zap.Error(err))
 	}
 
 	settingsSvc := settings.NewService(store, cfg.Agent, cfg.Session, logger)
+	agentRuntime := runtimeSvc.NewService(logger)
 	authSvc := auth.NewService(store, cfg.Auth.TokenTTL)
-	sessionMgr := session.NewManager(cfg.Session, cfg.Agent, store, settingsSvc, func() []agent.MCPServerSpec { return nil }, logger)
-	feedbackSvc := feedback.NewService(store, cfg.Feedback, cfg.Agent.HermesHome, settingsSvc.AgentSpec, logger)
+	sessionMgr := session.NewManager(cfg.Session, cfg.Agent, store, settingsSvc, agentRuntime.NewAdapter, func(domainID string) []agent.MCPServerSpec {
+		sources, err := store.ListKnowledgeSources(context.Background(), domainID, false)
+		if err != nil {
+			logger.Warn("load domain knowledge sources failed", zap.String("domainID", domainID), zap.Error(err))
+			return nil
+		}
+		specs := make([]agent.MCPServerSpec, 0, len(sources))
+		for _, src := range sources {
+			specs = append(specs, agent.MCPServerSpec{
+				Name:    src.Name,
+				Type:    src.Type,
+				URL:     src.URL,
+				Headers: src.Headers,
+				Command: src.Command,
+				Args:    src.Args,
+				Env:     src.Env,
+			})
+		}
+		return specs
+	}, logger)
+	feedbackSvc := feedback.NewService(store, cfg.Feedback, cfg.Agent.RuntimeHomeForDomain(config.DefaultDomainID), settingsSvc.AgentSpec, logger)
 	handoffSvc := handoff.NewService(store, cfg.Handoff, logger)
 	statsSvc := stats.NewService(store, sessionMgr.Counts)
 	wsHandler := ws.NewHandler(sessionMgr, authSvc, store, logger)
@@ -121,6 +140,7 @@ func main() {
 		Store:    store,
 		Sessions: sessionMgr,
 		Settings: settingsSvc,
+		Runtime:  agentRuntime,
 		Auth:     authSvc,
 		Feedback: feedbackSvc,
 		Handoff:  handoffSvc,

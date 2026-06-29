@@ -4,6 +4,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -54,10 +56,54 @@ type AgentConfig struct {
 	DefaultModel  string        `yaml:"default_model"`  // 兼容旧配置；新部署请在设置页配置
 	APIURL        string        `yaml:"api_url"`        // 兼容旧配置；新部署请在设置页配置
 	APIToken      string        `yaml:"api_token"`      // 兼容旧配置；新部署请在设置页配置
+	RuntimeRoot   string        `yaml:"runtime_root"`   // Agent Runtime 根目录；领域会在此目录下生成隔离子目录
 	HermesHome    string        `yaml:"hermes_home"`    // 兼容字段：当前 Runtime 工作目录（Hermes 使用 HERMES_HOME）
 	WorkDir       string        `yaml:"work_dir"`       // 会话工作目录根
 	SystemPrompt  string        `yaml:"system_prompt"`  // 兼容旧配置；新部署请在设置页配置
 	PromptTimeout time.Duration `yaml:"prompt_timeout"` // ACP 单轮回答最长等待时间；负数表示不主动超时
+}
+
+const DefaultDomainID = "default"
+
+// RuntimeHomeForDomain 返回领域隔离后的 Agent Runtime 工作目录。
+// 配置 runtime_root 时使用新目录结构；否则回退到 hermes_home 兼容旧部署。
+func (c AgentConfig) RuntimeHomeForDomain(domainID string) string {
+	domainID = normalizeDomainID(domainID)
+	if c.RuntimeRoot != "" {
+		return filepath.Join(c.RuntimeRoot, "domains", domainID, "home")
+	}
+	return c.HermesHome
+}
+
+// WorkDirForDomain 返回领域隔离后的会话工作目录根。
+func (c AgentConfig) WorkDirForDomain(domainID string) string {
+	domainID = normalizeDomainID(domainID)
+	if c.RuntimeRoot != "" {
+		return filepath.Join(c.RuntimeRoot, "domains", domainID, "workdir")
+	}
+	return c.WorkDir
+}
+
+func normalizeDomainID(domainID string) string {
+	domainID = strings.TrimSpace(domainID)
+	if domainID == "" {
+		return DefaultDomainID
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(domainID) {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return DefaultDomainID
+	}
+	return b.String()
 }
 
 // SessionConfig 坐席制会话池配置
@@ -144,11 +190,17 @@ func (c *Config) applyDefaults() {
 	if c.Agent.CliPath == "" {
 		c.Agent.CliPath = "hermes"
 	}
-	if c.Agent.HermesHome == "" {
+	if c.Agent.RuntimeRoot != "" && c.Agent.HermesHome == "" {
+		c.Agent.HermesHome = c.Agent.RuntimeHomeForDomain(DefaultDomainID)
+	} else if c.Agent.HermesHome == "" {
 		c.Agent.HermesHome = "data/hermes-home"
 	}
 	if c.Agent.WorkDir == "" {
-		c.Agent.WorkDir = "data/workdir"
+		if c.Agent.RuntimeRoot != "" {
+			c.Agent.WorkDir = c.Agent.WorkDirForDomain(DefaultDomainID)
+		} else {
+			c.Agent.WorkDir = "data/workdir"
+		}
 	}
 	if c.Agent.PromptTimeout == 0 {
 		c.Agent.PromptTimeout = 30 * time.Minute

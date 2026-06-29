@@ -26,10 +26,13 @@ func NewStore(db *sql.DB) *Store {
 
 // CreateSession 写入新会话
 func (s *Store) CreateSession(ctx context.Context, sess *model.Session) error {
+	if sess.DomainID == "" {
+		sess.DomainID = "default"
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, client_id, user_id, status, created_at, started_at, closed_at, close_reason, title, agent_session_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sess.ID, sess.ClientID, sess.UserID, sess.Status, sess.CreatedAt, sess.StartedAt, sess.ClosedAt, sess.CloseReason, sess.Title, sess.AgentSessionID)
+		`INSERT INTO sessions (id, client_id, user_id, domain_id, status, created_at, started_at, closed_at, close_reason, title, agent_session_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sess.ID, sess.ClientID, sess.UserID, sess.DomainID, sess.Status, sess.CreatedAt, sess.StartedAt, sess.ClosedAt, sess.CloseReason, sess.Title, sess.AgentSessionID)
 	return err
 }
 
@@ -65,7 +68,7 @@ func (s *Store) CloseUnfinishedSessions(ctx context.Context, reason model.CloseR
 // GetSession 按 ID 查询会话
 func (s *Store) GetSession(ctx context.Context, id string) (*model.Session, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, client_id, user_id, status, created_at, started_at, closed_at, close_reason, title, agent_session_id FROM sessions WHERE id=?`, id)
+		sessionSelectSQL+` WHERE id=?`, id)
 	return scanSession(row)
 }
 
@@ -74,7 +77,7 @@ func (s *Store) ListSessionsByStatus(ctx context.Context, statuses []model.Sessi
 	if len(statuses) == 0 {
 		return nil, nil
 	}
-	query := `SELECT id, client_id, user_id, status, created_at, started_at, closed_at, close_reason, title, agent_session_id FROM sessions WHERE status IN (`
+	query := sessionSelectSQL + ` WHERE status IN (`
 	args := make([]any, 0, len(statuses)+1)
 	for i, st := range statuses {
 		if i > 0 {
@@ -133,8 +136,7 @@ func (s *Store) ListClosedSessions(ctx context.Context, start, end *time.Time, u
 	queryArgs := append([]any{}, args...)
 	queryArgs = append(queryArgs, pageSize, (page-1)*pageSize)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, client_id, user_id, status, created_at, started_at, closed_at, close_reason, title, agent_session_id
-		 FROM sessions
+		sessionSelectSQL+`
 		 WHERE `+where+`
 		 ORDER BY closed_at DESC, created_at DESC
 		 LIMIT ? OFFSET ?`, queryArgs...)
@@ -157,8 +159,7 @@ func (s *Store) ListClosedSessions(ctx context.Context, start, end *time.Time, u
 // ListSessionsByUser 列出用户历史会话
 func (s *Store) ListSessionsByUser(ctx context.Context, userID string, limit int) ([]*model.Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, client_id, user_id, status, created_at, started_at, closed_at, close_reason, title, agent_session_id
-		 FROM sessions WHERE user_id=? ORDER BY created_at DESC LIMIT ?`, userID, limit)
+		sessionSelectSQL+` WHERE user_id=? ORDER BY created_at DESC LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -233,11 +234,16 @@ func (s *Store) DailySessionCounts(ctx context.Context, days int) (map[string]in
 
 type rowScanner interface{ Scan(dest ...any) error }
 
+const sessionSelectSQL = `SELECT id, client_id, user_id, domain_id, status, created_at, started_at, closed_at, close_reason, title, agent_session_id FROM sessions`
+
 func scanSession(r rowScanner) (*model.Session, error) {
 	var sess model.Session
 	var startedAt, closedAt sql.NullTime
-	if err := r.Scan(&sess.ID, &sess.ClientID, &sess.UserID, &sess.Status, &sess.CreatedAt, &startedAt, &closedAt, &sess.CloseReason, &sess.Title, &sess.AgentSessionID); err != nil {
+	if err := r.Scan(&sess.ID, &sess.ClientID, &sess.UserID, &sess.DomainID, &sess.Status, &sess.CreatedAt, &startedAt, &closedAt, &sess.CloseReason, &sess.Title, &sess.AgentSessionID); err != nil {
 		return nil, err
+	}
+	if sess.DomainID == "" {
+		sess.DomainID = "default"
 	}
 	if startedAt.Valid {
 		sess.StartedAt = &startedAt.Time
@@ -246,6 +252,157 @@ func scanSession(r rowScanner) (*model.Session, error) {
 		sess.ClosedAt = &closedAt.Time
 	}
 	return &sess, nil
+}
+
+// ---------- domains / knowledge sources ----------
+
+func (s *Store) EnsureDefaultDomain(ctx context.Context) error {
+	now := time.Now()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO domains (id, name, description, enabled, created_at, updated_at)
+		 VALUES ('default', '默认领域', '默认领域，兼容既有会话和知识配置。', TRUE, ?, ?)`, now, now)
+	return err
+}
+
+func (s *Store) ListDomains(ctx context.Context, includeDisabled bool) ([]*model.Domain, error) {
+	where := ""
+	if !includeDisabled {
+		where = " WHERE enabled=TRUE"
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, description, default_agent_id, enabled, created_at, updated_at FROM domains`+where+` ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*model.Domain
+	for rows.Next() {
+		d, err := scanDomain(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, d)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) GetDomain(ctx context.Context, id string) (*model.Domain, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, name, description, default_agent_id, enabled, created_at, updated_at FROM domains WHERE id=?`, id)
+	d, err := scanDomain(row)
+	if err != nil {
+		return nil, err
+	}
+	sources, err := s.ListKnowledgeSources(ctx, id, true)
+	if err != nil {
+		return nil, err
+	}
+	for _, src := range sources {
+		d.KnowledgeSources = append(d.KnowledgeSources, *src)
+	}
+	return d, nil
+}
+
+func (s *Store) UpsertDomain(ctx context.Context, d *model.Domain) error {
+	if d.ID == "" {
+		return fmt.Errorf("领域 ID 不能为空")
+	}
+	now := time.Now()
+	if d.CreatedAt.IsZero() {
+		d.CreatedAt = now
+	}
+	d.UpdatedAt = now
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO domains (id, name, description, default_agent_id, enabled, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, default_agent_id=excluded.default_agent_id, enabled=excluded.enabled, updated_at=excluded.updated_at`,
+		d.ID, d.Name, d.Description, d.DefaultAgentID, d.Enabled, d.CreatedAt, d.UpdatedAt)
+	return err
+}
+
+func (s *Store) ListKnowledgeSources(ctx context.Context, domainID string, includeDisabled bool) ([]*model.KnowledgeSource, error) {
+	where := `domain_id=?`
+	args := []any{domainID}
+	if !includeDisabled {
+		where += ` AND enabled=TRUE`
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, domain_id, name, type, url, headers, command, args, env, enabled, created_at, updated_at
+		 FROM domain_knowledge_sources WHERE `+where+` ORDER BY created_at ASC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*model.KnowledgeSource
+	for rows.Next() {
+		src, err := scanKnowledgeSource(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, src)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) UpsertKnowledgeSource(ctx context.Context, src *model.KnowledgeSource) error {
+	if src.ID == "" || src.DomainID == "" {
+		return fmt.Errorf("知识源 ID 和领域 ID 不能为空")
+	}
+	headers, err := json.Marshal(src.Headers)
+	if err != nil {
+		return err
+	}
+	args, err := json.Marshal(src.Args)
+	if err != nil {
+		return err
+	}
+	env, err := json.Marshal(src.Env)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	if src.CreatedAt.IsZero() {
+		src.CreatedAt = now
+	}
+	src.UpdatedAt = now
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO domain_knowledge_sources (id, domain_id, name, type, url, headers, command, args, env, enabled, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET domain_id=excluded.domain_id, name=excluded.name, type=excluded.type, url=excluded.url, headers=excluded.headers,
+		   command=excluded.command, args=excluded.args, env=excluded.env, enabled=excluded.enabled, updated_at=excluded.updated_at`,
+		src.ID, src.DomainID, src.Name, src.Type, src.URL, string(headers), src.Command, string(args), string(env), src.Enabled, src.CreatedAt, src.UpdatedAt)
+	return err
+}
+
+func (s *Store) DeleteKnowledgeSource(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM domain_knowledge_sources WHERE id=?`, id)
+	return err
+}
+
+func scanDomain(r rowScanner) (*model.Domain, error) {
+	var d model.Domain
+	if err := r.Scan(&d.ID, &d.Name, &d.Description, &d.DefaultAgentID, &d.Enabled, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+func scanKnowledgeSource(r rowScanner) (*model.KnowledgeSource, error) {
+	var src model.KnowledgeSource
+	var headers, args, env string
+	if err := r.Scan(&src.ID, &src.DomainID, &src.Name, &src.Type, &src.URL, &headers, &src.Command, &args, &env, &src.Enabled, &src.CreatedAt, &src.UpdatedAt); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal([]byte(headers), &src.Headers)
+	_ = json.Unmarshal([]byte(args), &src.Args)
+	_ = json.Unmarshal([]byte(env), &src.Env)
+	if src.Headers == nil {
+		src.Headers = map[string]string{}
+	}
+	if src.Env == nil {
+		src.Env = map[string]string{}
+	}
+	return &src, nil
 }
 
 // ---------- users / auth ----------

@@ -3,6 +3,7 @@ module callme
 go 1.26.2
 
 require (
+	github.com/colink-ai/helios v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
@@ -55,3 +56,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/colink-ai/helios => ../Helios

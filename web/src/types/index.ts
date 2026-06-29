@@ -24,12 +24,40 @@ export interface Session {
   clientId: string;
   userId?: string;
   username?: string;
+  domainId?: string;
+  domainName?: string;
   status: SessionStatus;
   createdAt: string;
   startedAt?: string;
   closedAt?: string;
   closeReason?: string;
   title: string;
+}
+
+export interface KnowledgeSource {
+  id: string;
+  domainId: string;
+  name: string;
+  type: 'stdio' | 'http' | string;
+  url?: string;
+  headers?: Record<string, string>;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  enabled: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface Domain {
+  id: string;
+  name: string;
+  description?: string;
+  defaultAgentId?: string;
+  enabled: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  knowledgeSources?: KnowledgeSource[];
 }
 
 export interface SessionView extends Session {

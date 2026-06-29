@@ -1,4 +1,8 @@
-// Package agent Agent 适配器抽象（移植自 Colink，按客服会话场景裁剪）
+// Package agent defines Callme's application-facing runtime DTOs.
+//
+// Concrete agent protocol adapters are owned by Helios. Callme keeps these
+// small types so its session, WebSocket, settings, and persistence layers do
+// not depend on Helios contracts directly.
 package agent
 
 import (
@@ -45,11 +49,12 @@ type Chunk struct {
 
 // AgentSpec Agent 运行配置（模型切换的载体：改这里 + 重启会话即可换模型）
 type AgentSpec struct {
-	Type               string        // 插件类型：hermes
+	Type               string        // Agent 类型：hermes
 	CliPath            string        // CLI 路径
 	DefaultModel       string        // 模型 ID
 	APIURL             string        // 自定义 provider base_url
 	APIToken           string        // 自定义 provider token
+	RuntimeHome        string        // 通用 Agent Runtime 工作目录（按领域隔离）
 	HermesHome         string        // 共享持久化配置/记忆目录（自学习）
 	SystemPrompt       string        // 客服系统提示词（注入首轮）
 	SupportsMultimodal bool          // 当前模型是否允许图片等多模态输入
@@ -84,7 +89,8 @@ const (
 	SessionStatusStopped SessionStatus = "stopped"
 )
 
-// Adapter Agent 适配器接口：一个会话对应一个常驻 Agent 进程，多轮 Prompt
+// Adapter is the narrow application-facing runtime interface consumed by
+// Callme. Production implementations are backed by Helios.
 type Adapter interface {
 	// StartSession 启动常驻会话（拉起 Agent 进程、握手、建会话）
 	StartSession(ctx context.Context, sessionID string, req *SessionRequest) error

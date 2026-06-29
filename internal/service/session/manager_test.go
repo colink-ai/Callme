@@ -69,24 +69,6 @@ func (f *fakeAdapter) UsedNativeResume(sessionID string) bool {
 	return f.nativeResume[sessionID]
 }
 
-var registerFakeOnce sync.Once
-
-func registerFake() {
-	registerFakeOnce.Do(func() {
-		agent.RegisterPlugin(agent.PluginMeta{
-			Type: "fake",
-			Name: "Fake",
-			Factory: func() agent.Adapter {
-				return &fakeAdapter{
-					sessions:     make(map[string]bool),
-					agentIDs:     make(map[string]string),
-					nativeResume: make(map[string]bool),
-				}
-			},
-		})
-	})
-}
-
 func testUser(id string, role model.UserRole) *model.User {
 	return &model.User{ID: id, Username: id, Role: role}
 }
@@ -103,7 +85,6 @@ func (stubSettings) PoolSettings() model.PoolSettings {
 
 func newTestManager(t *testing.T) (*Manager, *repo.Store) {
 	t.Helper()
-	registerFake()
 
 	dir := t.TempDir()
 	db, err := repo.Open("sqlite", filepath.Join(dir, "test.db"))
@@ -122,9 +103,17 @@ func newTestManager(t *testing.T) (*Manager, *repo.Store) {
 		MaxPerClient:   1,
 	}
 	agentCfg := config.AgentConfig{WorkDir: filepath.Join(dir, "workdir"), HermesHome: filepath.Join(dir, "home")}
-	m := NewManager(cfg, agentCfg, store, stubSettings{}, func() []agent.MCPServerSpec { return nil }, zap.NewNop())
+	m := NewManager(cfg, agentCfg, store, stubSettings{}, fakeAdapterFactory, func(domainID string) []agent.MCPServerSpec { return nil }, zap.NewNop())
 	t.Cleanup(m.Shutdown)
 	return m, store
+}
+
+func fakeAdapterFactory(agent.AgentSpec) (agent.Adapter, error) {
+	return &fakeAdapter{
+		sessions:     make(map[string]bool),
+		agentIDs:     make(map[string]string),
+		nativeResume: make(map[string]bool),
+	}, nil
 }
 
 func TestSeatLimitAndQueue(t *testing.T) {

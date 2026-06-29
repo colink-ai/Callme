@@ -5,6 +5,7 @@ import {
   CheckOutlined,
   CommentOutlined,
   DashboardOutlined,
+  DatabaseOutlined,
   DesktopOutlined,
   FileTextOutlined,
   SettingOutlined,
@@ -18,6 +19,7 @@ import AuthPage from './pages/Auth';
 import ChatPage from './pages/Chat';
 import CurationPage from './pages/Curation';
 import DashboardPage from './pages/Dashboard';
+import DomainsPage from './pages/Domains';
 import MonitorPage from './pages/Monitor';
 import TicketsPage from './pages/Tickets';
 import SettingsPage from './pages/Settings';
@@ -40,6 +42,7 @@ const adminMenuItems = [
   { key: '/monitor', icon: <DesktopOutlined />, label: '会话监控' },
   { key: '/tickets', icon: <FileTextOutlined />, label: '升级工单' },
   { key: '/users', icon: <TeamOutlined />, label: '用户管理' },
+  { key: '/domains', icon: <DatabaseOutlined />, label: '领域管理' },
   { key: '/settings', icon: <SettingOutlined />, label: '设置' },
 ];
 
@@ -190,6 +193,7 @@ export default function App() {
               <Route path="/monitor" element={<MonitorPage />} />
               <Route path="/tickets" element={<TicketsPage />} />
               <Route path="/users" element={<UsersPage />} />
+              <Route path="/domains" element={<DomainsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </>
           )}

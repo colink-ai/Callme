@@ -21,6 +21,7 @@ import (
 	"callme/internal/service/auth"
 	"callme/internal/service/feedback"
 	"callme/internal/service/handoff"
+	runtimeSvc "callme/internal/service/runtime"
 	"callme/internal/service/session"
 	"callme/internal/service/settings"
 	"callme/internal/service/stats"
@@ -61,19 +62,19 @@ func (a *apiFakeAdapter) AgentSessionID(sessionID string) string {
 	return a.agentIDs[sessionID]
 }
 
-var registerAPIFakeOnce sync.Once
+type apiFakeRuntime struct{}
 
-func registerAPIFakeAgent() {
-	registerAPIFakeOnce.Do(func() {
-		agent.RegisterPlugin(agent.PluginMeta{
-			Type:        "api_fake",
-			Name:        "API Fake",
-			Description: "API integration test fake agent",
-			Factory: func() agent.Adapter {
-				return &apiFakeAdapter{agentIDs: map[string]string{}}
-			},
-		})
-	})
+func (apiFakeRuntime) Types() []runtimeSvc.AgentType {
+	return []runtimeSvc.AgentType{{
+		Type:        runtimeSvc.TypeHermes,
+		Name:        "Hermes",
+		Description: "test runtime",
+		DefaultPath: "hermes",
+	}}
+}
+
+func (apiFakeRuntime) CheckHealth(context.Context, agent.AgentSpec) error {
+	return nil
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -92,7 +93,6 @@ type apiHarness struct {
 func newAPIHarness(t *testing.T) *apiHarness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	registerAPIFakeAgent()
 
 	dir := t.TempDir()
 	originalTransport := http.DefaultTransport
@@ -138,7 +138,7 @@ func newAPIHarness(t *testing.T) *apiHarness {
 
 	logger := zap.NewNop()
 	settingsSvc := settings.NewService(store, agentCfg, sessionCfg, logger)
-	sessionMgr := session.NewManager(sessionCfg, agentCfg, store, settingsSvc, func() []agent.MCPServerSpec { return nil }, logger)
+	sessionMgr := session.NewManager(sessionCfg, agentCfg, store, settingsSvc, apiFakeAdapterFactory, func(domainID string) []agent.MCPServerSpec { return nil }, logger)
 	authSvc := auth.NewService(store, time.Hour)
 	feedbackSvc := feedback.NewService(store, config.FeedbackConfig{
 		DistillInterval: time.Hour,
@@ -159,6 +159,7 @@ func newAPIHarness(t *testing.T) *apiHarness {
 		Store:    store,
 		Sessions: sessionMgr,
 		Settings: settingsSvc,
+		Runtime:  apiFakeRuntime{},
 		Auth:     authSvc,
 		Feedback: feedbackSvc,
 		Handoff:  handoffSvc,
@@ -168,6 +169,10 @@ func newAPIHarness(t *testing.T) *apiHarness {
 		Version:  "test",
 	})
 	return &apiHarness{t: t, router: router, store: store, db: db}
+}
+
+func apiFakeAdapterFactory(agent.AgentSpec) (agent.Adapter, error) {
+	return &apiFakeAdapter{agentIDs: map[string]string{}}, nil
 }
 
 func (h *apiHarness) do(method, path, token, activeRole string, body any) *httptest.ResponseRecorder {
@@ -373,7 +378,7 @@ func TestSessionSettingsStatsAndWSRoutes(t *testing.T) {
 		t.Fatalf("update pool status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	rr = h.do(http.MethodGet, "/api/v1/agent/types", adminToken, string(model.UserRoleAdmin), nil)
-	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "api_fake") {
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "hermes") {
 		t.Fatalf("agent types status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	rr = h.do(http.MethodPost, "/api/v1/agent/health", adminToken, string(model.UserRoleAdmin), nil)

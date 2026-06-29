@@ -10,9 +10,10 @@ database:
   dsn: data/callme.db
 
 agent:
-  hermes_home: data/hermes-home # 兼容字段：当前 Runtime 工作目录；Hermes 使用 HERMES_HOME
-  work_dir: data/workdir        # 会话工作目录根
-  prompt_timeout: 30m           # ACP 单轮回答最长等待时间；内网慢模型可调大，负数表示不主动超时
+  # Agent Runtime 根目录；后续每个领域会在 domains/{domain_id} 下隔离 home、workdir、skill、memory 和知识配置。
+  # 旧配置中的 hermes_home / work_dir 仍兼容，但新部署建议只配置 runtime_root。
+  runtime_root: data/agent-runtime
+  prompt_timeout: 30m # ACP 单轮回答最长等待时间；内网慢模型可调大，负数表示不主动超时
 
 auth:
   token_ttl: 168h

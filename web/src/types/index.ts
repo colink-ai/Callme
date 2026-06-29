@@ -54,6 +54,7 @@ export interface Domain {
   name: string;
   description?: string;
   defaultAgentId?: string;
+  runtimePath?: string;
   enabled: boolean;
   createdAt?: string;
   updatedAt?: string;

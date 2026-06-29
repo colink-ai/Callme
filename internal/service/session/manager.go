@@ -344,7 +344,7 @@ func (m *Manager) activate(l *live) error {
 		domainID = config.DefaultDomainID
 		l.sess.DomainID = domainID
 	}
-	runtimeHome := m.agentCfg.RuntimeHomeForDomain(domainID)
+	runtimeHome := m.agentCfg.RuntimeHomeForDomainAgent(domainID, spec.Type)
 	spec.RuntimeHome = runtimeHome
 	spec.HermesHome = runtimeHome
 	if spec.DefaultModel == "" {
@@ -357,7 +357,12 @@ func (m *Manager) activate(l *live) error {
 		return err
 	}
 
-	workDir := filepath.Join(m.agentCfg.WorkDirForDomain(domainID), l.sess.ID)
+	if err := m.agentCfg.EnsureDomainRuntimeDirs(domainID, spec.Type); err != nil {
+		m.evict(l.sess.ID)
+		return fmt.Errorf("创建领域运行时目录失败: %w", err)
+	}
+
+	workDir := filepath.Join(m.agentCfg.WorkDirForDomainAgent(domainID, spec.Type), l.sess.ID)
 	if absWorkDir, err := filepath.Abs(workDir); err == nil {
 		workDir = absWorkDir
 	}

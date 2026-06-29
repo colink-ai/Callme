@@ -1,4 +1,4 @@
-import { Avatar, Dropdown, Layout, Menu, Space, Spin, Tag, Typography } from 'antd';
+import { Avatar, Dropdown, Layout, Menu, Select, Space, Spin, Tag, Typography } from 'antd';
 import {
   BgColorsOutlined,
   BulbOutlined,
@@ -28,6 +28,7 @@ import { themeList } from './themes';
 import { useThemeStore } from './store/themeStore';
 import { useAuthStore } from './store/authStore';
 import { useChatStore } from './store/chatStore';
+import { useDomainStore } from './store/domainStore';
 import { useEffect } from 'react';
 
 const { Header, Content } = Layout;
@@ -92,6 +93,7 @@ export default function App() {
   const location = useLocation();
   const { token, user, activeRole, version, restoring, restore, logout, setActiveRole } = useAuthStore();
   const resetChat = useChatStore((s) => s.reset);
+  const { domains, selectedDomainId, loading: domainsLoading, loadDomains, setSelectedDomainId, reset: resetDomains } = useDomainStore();
   const roles = user?.roles?.length ? user.roles : user ? [user.role] : [];
   const usingRole = activeRole && roles.includes(activeRole as typeof roles[number]) ? activeRole : user?.role;
   const hasActiveRole = (role: string) => usingRole === role;
@@ -107,6 +109,12 @@ export default function App() {
   useEffect(() => {
     restore();
   }, [restore]);
+
+  useEffect(() => {
+    if (token) {
+      void loadDomains();
+    }
+  }, [token, loadDomains]);
 
   if (restoring) {
     return (
@@ -135,6 +143,17 @@ export default function App() {
       <Header className="app-header">
         <div className="app-header-left">
           <Logo size={30} />
+          {domains.length > 0 && (
+            <Select
+              size="small"
+              value={selectedDomainId}
+              loading={domainsLoading}
+              style={{ width: 160 }}
+              popupMatchSelectWidth={false}
+              options={domains.map((domain) => ({ value: domain.id, label: domain.name }))}
+              onChange={setSelectedDomainId}
+            />
+          )}
           <Menu
             mode="horizontal"
             selectedKeys={[selected]}
@@ -167,6 +186,7 @@ export default function App() {
                   label: '退出登录',
                   onClick: async () => {
                     resetChat();
+                    resetDomains();
                     await logout();
                   },
                 },

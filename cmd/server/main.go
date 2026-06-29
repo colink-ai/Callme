@@ -101,6 +101,16 @@ func main() {
 	}
 
 	settingsSvc := settings.NewService(store, cfg.Agent, cfg.Session, logger)
+	if domains, err := store.ListDomains(context.Background(), true); err != nil {
+		logger.Warn("list domains for runtime directory initialization failed", zap.Error(err))
+	} else {
+		agentType := settingsSvc.AgentSpec().Type
+		for _, domain := range domains {
+			if err := cfg.Agent.EnsureDomainRuntimeDirs(domain.ID, agentType); err != nil {
+				logger.Warn("ensure domain runtime directory failed", zap.String("domainID", domain.ID), zap.Error(err))
+			}
+		}
+	}
 	agentRuntime := runtimeSvc.NewService(logger)
 	authSvc := auth.NewService(store, cfg.Auth.TokenTTL)
 	sessionMgr := session.NewManager(cfg.Session, cfg.Agent, store, settingsSvc, agentRuntime.NewAdapter, func(domainID string) []agent.MCPServerSpec {
@@ -145,6 +155,7 @@ func main() {
 		Feedback: feedbackSvc,
 		Handoff:  handoffSvc,
 		Stats:    statsSvc,
+		AgentCfg: cfg.Agent,
 		WS:       wsHandler,
 		Logger:   logger,
 		WebDist:  dist,

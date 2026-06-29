@@ -56,7 +56,7 @@ type AgentConfig struct {
 	DefaultModel  string        `yaml:"default_model"`  // 兼容旧配置；新部署请在设置页配置
 	APIURL        string        `yaml:"api_url"`        // 兼容旧配置；新部署请在设置页配置
 	APIToken      string        `yaml:"api_token"`      // 兼容旧配置；新部署请在设置页配置
-	RuntimeRoot   string        `yaml:"runtime_root"`   // Agent Runtime 根目录；领域会在此目录下生成隔离子目录
+	RuntimeRoot   string        `yaml:"runtime_root"`   // Agent Runtime 根目录；领域会在此目录下按领域 ID 生成隔离子目录
 	HermesHome    string        `yaml:"hermes_home"`    // 兼容字段：当前 Runtime 工作目录（Hermes 使用 HERMES_HOME）
 	WorkDir       string        `yaml:"work_dir"`       // 会话工作目录根
 	SystemPrompt  string        `yaml:"system_prompt"`  // 兼容旧配置；新部署请在设置页配置
@@ -68,20 +68,61 @@ const DefaultDomainID = "default"
 // RuntimeHomeForDomain 返回领域隔离后的 Agent Runtime 工作目录。
 // 配置 runtime_root 时使用新目录结构；否则回退到 hermes_home 兼容旧部署。
 func (c AgentConfig) RuntimeHomeForDomain(domainID string) string {
+	return c.RuntimeHomeForDomainAgent(domainID, c.Type)
+}
+
+// RuntimeHomeForDomainAgent 返回领域 + 基础 Agent 类型隔离后的运行时 home。
+func (c AgentConfig) RuntimeHomeForDomainAgent(domainID, agentType string) string {
 	domainID = normalizeDomainID(domainID)
 	if c.RuntimeRoot != "" {
-		return filepath.Join(c.RuntimeRoot, "domains", domainID, "home")
+		return filepath.Join(c.AgentRuntimeDirForDomain(domainID, agentType), "home")
 	}
 	return c.HermesHome
 }
 
 // WorkDirForDomain 返回领域隔离后的会话工作目录根。
 func (c AgentConfig) WorkDirForDomain(domainID string) string {
+	return c.WorkDirForDomainAgent(domainID, c.Type)
+}
+
+// WorkDirForDomainAgent 返回领域 + 基础 Agent 类型隔离后的会话工作目录根。
+func (c AgentConfig) WorkDirForDomainAgent(domainID, agentType string) string {
 	domainID = normalizeDomainID(domainID)
 	if c.RuntimeRoot != "" {
-		return filepath.Join(c.RuntimeRoot, "domains", domainID, "workdir")
+		return filepath.Join(c.AgentRuntimeDirForDomain(domainID, agentType), "workdir")
 	}
 	return c.WorkDir
+}
+
+// DomainRuntimeDir 返回领域级运行时目录。
+func (c AgentConfig) DomainRuntimeDir(domainID string) string {
+	if c.RuntimeRoot == "" {
+		return ""
+	}
+	return filepath.Join(c.RuntimeRoot, normalizeDomainID(domainID))
+}
+
+// AgentRuntimeDirForDomain 返回某领域下特定基础 Agent 的运行时目录。
+func (c AgentConfig) AgentRuntimeDirForDomain(domainID, agentType string) string {
+	domainDir := c.DomainRuntimeDir(domainID)
+	if domainDir == "" {
+		return ""
+	}
+	return filepath.Join(domainDir, normalizeAgentType(agentType, c.Type))
+}
+
+// EnsureDomainRuntimeDirs 确保领域下当前基础 Agent 的运行时目录存在。
+func (c AgentConfig) EnsureDomainRuntimeDirs(domainID, agentType string) error {
+	base := c.AgentRuntimeDirForDomain(domainID, agentType)
+	if base == "" {
+		return nil
+	}
+	for _, dir := range []string{filepath.Join(base, "home"), filepath.Join(base, "workdir")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func normalizeDomainID(domainID string) string {
@@ -102,6 +143,31 @@ func normalizeDomainID(domainID string) string {
 	}
 	if b.Len() == 0 {
 		return DefaultDomainID
+	}
+	return b.String()
+}
+
+func normalizeAgentType(agentType, fallback string) string {
+	agentType = strings.TrimSpace(agentType)
+	if agentType == "" {
+		agentType = strings.TrimSpace(fallback)
+	}
+	if agentType == "" {
+		agentType = "hermes"
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(agentType) {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "hermes"
 	}
 	return b.String()
 }

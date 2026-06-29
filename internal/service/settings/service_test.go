@@ -166,7 +166,7 @@ func TestAgentSpecUsesRuntimeRootDefaultDomain(t *testing.T) {
 	if spec.RuntimeHome == "" || spec.RuntimeHome != spec.HermesHome {
 		t.Fatalf("runtime home should be mirrored for compatibility, spec=%+v", spec)
 	}
-	if want := filepath.Join(agentCfg.RuntimeRoot, "domains", "default", "home"); spec.RuntimeHome != want {
+	if want := filepath.Join(agentCfg.RuntimeRoot, "default", "hermes", "home"); spec.RuntimeHome != want {
 		t.Fatalf("runtime home = %q, want %q", spec.RuntimeHome, want)
 	}
 }

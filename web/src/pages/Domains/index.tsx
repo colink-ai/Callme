@@ -178,6 +178,11 @@ export default function DomainsPage() {
               <Form.Item label="说明">
                 <Input.TextArea rows={3} value={domain.description} onChange={(e) => setDomain((prev) => ({ ...prev, description: e.target.value }))} />
               </Form.Item>
+              {domain.runtimePath && (
+                <Form.Item label="运行时目录">
+                  <Text code copyable>{domain.runtimePath}</Text>
+                </Form.Item>
+              )}
               <Button type="primary" icon={<SaveOutlined />} onClick={saveDomain}>保存领域</Button>
             </Form>
           </Card>

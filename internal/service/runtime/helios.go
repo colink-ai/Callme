@@ -148,12 +148,13 @@ func (h *HeliosAdapter) StartSession(ctx context.Context, sessionID string, req 
 		return fmt.Errorf("session request is required")
 	}
 	handle, err := h.engine.StartSession(ctx, helios.SessionRequest{
-		SessionID:       sessionID,
-		Agent:           toHeliosAgentSpec(req.Spec),
-		WorkDir:         req.WorkDir,
-		RuntimeHome:     runtimeHome(req.Spec),
-		MCPServers:      toHeliosMCPServers(req.MCPServers),
-		ResumeSessionID: req.ResumeSessionID,
+		SessionID:         sessionID,
+		Agent:             toHeliosAgentSpec(req.Spec),
+		WorkDir:           req.WorkDir,
+		RuntimeConfigMode: helios.RuntimeConfigIsolated,
+		RuntimeHome:       runtimeHome(req.Spec),
+		MCPServers:        toHeliosMCPServers(req.MCPServers),
+		ResumeSessionID:   req.ResumeSessionID,
 	})
 	if err != nil {
 		return err
@@ -251,6 +252,7 @@ func toHeliosAgentSpec(spec agent.AgentSpec) helios.AgentSpec {
 		DefaultModel:       spec.DefaultModel,
 		APIURL:             spec.APIURL,
 		APIToken:           spec.APIToken,
+		RuntimeConfigMode:  helios.RuntimeConfigIsolated,
 		RuntimeHome:        runtimeHome(spec),
 		SystemPrompt:       spec.SystemPrompt,
 		SupportsMultimodal: spec.SupportsMultimodal,
@@ -366,10 +368,10 @@ func generateHermesConfig(logger *zap.Logger, spec agent.AgentSpec, mcpServers [
 		cfg["model"].(map[string]any)["provider"] = "custom"
 		cfg["model"].(map[string]any)["base_url"] = spec.APIURL
 	}
-	if len(mcpServers) > 0 {
-		if servers := buildHermesMCPServers(logger, mcpServers); len(servers) > 0 {
-			cfg["mcp_servers"] = servers
-		}
+	if servers := buildHermesMCPServers(logger, mcpServers); len(servers) > 0 {
+		cfg["mcp_servers"] = servers
+	} else {
+		delete(cfg, "mcp_servers")
 	}
 
 	cfg["memory"] = map[string]any{"memory_enabled": false}

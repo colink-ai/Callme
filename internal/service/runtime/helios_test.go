@@ -10,6 +10,7 @@ import (
 	"callme/internal/service/agent"
 
 	helioscontracts "github.com/colink-ai/helios/contracts"
+	helios "github.com/colink-ai/helios/runtime"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
@@ -137,6 +138,9 @@ func TestHeliosSpecConversions(t *testing.T) {
 	got := toHeliosAgentSpec(spec)
 	if got.Type != TypeHermes || got.CLIPath != spec.CliPath || got.RuntimeHome != spec.RuntimeHome {
 		t.Fatalf("unexpected helios agent spec: %+v", got)
+	}
+	if got.RuntimeConfigMode != helios.RuntimeConfigIsolated {
+		t.Fatalf("Callme runtime should use isolated config mode, got %q", got.RuntimeConfigMode)
 	}
 
 	servers := toHeliosMCPServers([]agent.MCPServerSpec{{

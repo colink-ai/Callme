@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"callme/internal/config"
 	"callme/internal/model"
 	"callme/internal/repo"
 	"callme/internal/service/agent"
@@ -37,6 +38,7 @@ type Deps struct {
 	Feedback *feedback.Service
 	Handoff  *handoff.Service
 	Stats    *stats.Service
+	AgentCfg config.AgentConfig
 	WS       *ws.Handler
 	Logger   *zap.Logger
 	WebDist  string // 前端构建产物目录（为空则不挂载）
@@ -329,6 +331,7 @@ func (d *Deps) listDomains(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	d.attachRuntimePaths(domains...)
 	c.JSON(http.StatusOK, gin.H{"domains": domains})
 }
 
@@ -342,7 +345,31 @@ func (d *Deps) getDomain(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "领域不存在"})
 		return
 	}
+	d.attachRuntimePaths(domain)
 	c.JSON(http.StatusOK, domain)
+}
+
+func (d *Deps) currentAgentType() string {
+	if d.Settings != nil {
+		if spec := d.Settings.AgentSpec(); spec.Type != "" {
+			return spec.Type
+		}
+	}
+	return d.AgentCfg.Type
+}
+
+func (d *Deps) ensureDomainRuntime(domainID string) error {
+	return d.AgentCfg.EnsureDomainRuntimeDirs(domainID, d.currentAgentType())
+}
+
+func (d *Deps) attachRuntimePaths(domains ...*model.Domain) {
+	agentType := d.currentAgentType()
+	for _, domain := range domains {
+		if domain == nil {
+			continue
+		}
+		domain.RuntimePath = d.AgentCfg.AgentRuntimeDirForDomain(domain.ID, agentType)
+	}
 }
 
 func (d *Deps) upsertDomain(c *gin.Context) {
@@ -360,7 +387,13 @@ func (d *Deps) upsertDomain(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if err := d.ensureDomainRuntime(req.ID); err != nil {
+		d.Logger.Warn("ensure domain runtime directory failed", zap.String("domainID", req.ID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建领域运行时目录失败"})
+		return
+	}
 	domain, _ := d.Store.GetDomain(c.Request.Context(), req.ID)
+	d.attachRuntimePaths(domain)
 	c.JSON(http.StatusOK, domain)
 }
 
@@ -388,6 +421,7 @@ func (d *Deps) upsertKnowledgeSource(c *gin.Context) {
 		return
 	}
 	domain, _ := d.Store.GetDomain(c.Request.Context(), req.DomainID)
+	d.attachRuntimePaths(domain)
 	c.JSON(http.StatusOK, domain)
 }
 
@@ -397,6 +431,7 @@ func (d *Deps) deleteKnowledgeSource(c *gin.Context) {
 		return
 	}
 	domain, _ := d.Store.GetDomain(c.Request.Context(), c.Param("id"))
+	d.attachRuntimePaths(domain)
 	c.JSON(http.StatusOK, domain)
 }
 

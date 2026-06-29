@@ -164,6 +164,7 @@ type Domain struct {
 	Name             string            `json:"name"`
 	Description      string            `json:"description,omitempty"`
 	DefaultAgentID   string            `json:"defaultAgentId,omitempty"`
+	RuntimePath      string            `json:"runtimePath,omitempty"`
 	Enabled          bool              `json:"enabled"`
 	CreatedAt        time.Time         `json:"createdAt"`
 	UpdatedAt        time.Time         `json:"updatedAt"`

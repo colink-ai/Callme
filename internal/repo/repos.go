@@ -286,6 +286,55 @@ func (s *Store) ListDomains(ctx context.Context, includeDisabled bool) ([]*model
 	return result, rows.Err()
 }
 
+func (s *Store) ListDomainsForUser(ctx context.Context, user *model.User, includeDisabled bool) ([]*model.Domain, error) {
+	if user != nil && user.HasRole(model.UserRoleAdmin) {
+		return s.ListDomains(ctx, includeDisabled)
+	}
+	where := "WHERE d.enabled=TRUE AND (ud.user_id=? OR d.id='default')"
+	args := []any{""}
+	if user != nil {
+		args[0] = user.ID
+	}
+	if includeDisabled {
+		where = "WHERE ud.user_id=? OR d.id='default'"
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT d.id, d.name, d.description, d.default_agent_id, d.enabled, d.created_at, d.updated_at
+		 FROM domains d
+		 LEFT JOIN user_domains ud ON ud.domain_id=d.id
+		 `+where+`
+		 ORDER BY d.created_at ASC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*model.Domain
+	for rows.Next() {
+		d, err := scanDomain(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, d)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) UserCanUseDomain(ctx context.Context, user *model.User, domainID string) (bool, error) {
+	if user != nil && user.HasRole(model.UserRoleAdmin) {
+		return true, nil
+	}
+	if domainID == "" || domainID == "default" {
+		return true, nil
+	}
+	var n int
+	userID := ""
+	if user != nil {
+		userID = user.ID
+	}
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_domains WHERE user_id=? AND domain_id=?`, userID, domainID).Scan(&n)
+	return n > 0, err
+}
+
 func (s *Store) GetDomain(ctx context.Context, id string) (*model.Domain, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, name, description, default_agent_id, enabled, created_at, updated_at FROM domains WHERE id=?`, id)
@@ -420,6 +469,12 @@ func (s *Store) CreateUser(ctx context.Context, u *model.User) error {
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO users (id, username, password_hash, role, roles, max_sessions, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		u.ID, u.Username, u.PasswordHash, u.Role, string(rolesJSON), u.MaxSessions, u.CreatedAt, u.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO user_domains (user_id, domain_id, created_at) VALUES (?, 'default', ?)`,
+		u.ID, time.Now())
 	return err
 }
 
@@ -466,7 +521,67 @@ func (s *Store) ListUsers(ctx context.Context) ([]*model.User, error) {
 		u.Roles = decodeUserRoles(u.Role, roles)
 		result = append(result, &u)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, u := range result {
+		domains, err := s.ListUserDomainIDs(ctx, u.ID)
+		if err != nil {
+			return nil, err
+		}
+		u.DomainIDs = domains
+	}
+	return result, nil
+}
+
+func (s *Store) ListUserDomainIDs(ctx context.Context, userID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT domain_id FROM user_domains WHERE user_id=? ORDER BY domain_id ASC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		result = append(result, id)
+	}
 	return result, rows.Err()
+}
+
+func (s *Store) SetUserDomains(ctx context.Context, userID string, domainIDs []string) error {
+	if userID == "" {
+		return fmt.Errorf("用户 ID 不能为空")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM user_domains WHERE user_id=?`, userID); err != nil {
+		return err
+	}
+	seen := map[string]struct{}{}
+	now := time.Now()
+	for _, id := range domainIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO user_domains (user_id, domain_id, created_at)
+			 SELECT ?, id, ? FROM domains WHERE id=?`,
+			userID, now, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) UsernamesByIDs(ctx context.Context, ids []string) (map[string]string, error) {
@@ -553,6 +668,9 @@ func (s *Store) DeleteUser(ctx context.Context, id string) error {
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM auth_tokens WHERE user_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM user_domains WHERE user_id=?`, id); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET user_id='' WHERE user_id=?`, id); err != nil {

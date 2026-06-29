@@ -4,7 +4,7 @@ import { DeleteOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api, apiErrorMessage } from '../../api/client';
 import { useAuthStore } from '../../store/authStore';
-import type { User, UserRole } from '../../types';
+import type { Domain, User, UserRole } from '../../types';
 
 const { Title } = Typography;
 
@@ -26,11 +26,17 @@ const roleColors: Record<UserRole, string> = {
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
+  const [domains, setDomains] = useState<Domain[]>([]);
   const currentUser = useAuthStore((s) => s.user);
 
   const load = async () => {
     try {
-      setUsers(await api.listUsers());
+      const [nextUsers, nextDomains] = await Promise.all([
+        api.listUsers(),
+        api.listDomains(true),
+      ]);
+      setUsers(nextUsers);
+      setDomains(nextDomains);
     } catch (err) {
       message.error(apiErrorMessage(err));
     }
@@ -40,10 +46,13 @@ export default function UsersPage() {
     load();
   }, []);
 
-  const updateRole = async (id: string, roles: UserRole[], maxSessions?: number) => {
+  const updateUser = async (user: User, patch: Partial<Pick<User, 'roles' | 'maxSessions' | 'domainIds'>>) => {
+    const roles = patch.roles ?? (user.roles?.length ? user.roles : [user.role]);
+    const maxSessions = patch.maxSessions ?? user.maxSessions;
+    const domainIds = patch.domainIds ?? user.domainIds ?? ['default'];
     try {
-      await api.updateUserRole(id, roles, maxSessions);
-      message.success('角色已更新');
+      await api.updateUserRole(user.id, roles, maxSessions, domainIds);
+      message.success('用户配置已更新');
       await load();
     } catch (err) {
       message.error(apiErrorMessage(err));
@@ -84,6 +93,22 @@ export default function UsersPage() {
             render: (v: number) => `${v || 1} 个`,
           },
           {
+            title: '可用领域',
+            dataIndex: 'domainIds',
+            width: 260,
+            render: (_: string[] | undefined, record) => (
+              <Select
+                mode="multiple"
+                value={record.domainIds?.length ? record.domainIds : ['default']}
+                style={{ width: 240 }}
+                disabled={record.roles?.includes('admin') || record.role === 'admin'}
+                placeholder="选择领域"
+                options={domains.map((domain) => ({ label: domain.name, value: domain.id }))}
+                onChange={(domainIds) => updateUser(record, { domainIds })}
+              />
+            ),
+          },
+          {
             title: '操作',
             render: (_, record) => (
               <Space>
@@ -91,7 +116,7 @@ export default function UsersPage() {
                   mode="multiple"
                   value={record.roles?.length ? record.roles : [record.role]}
                   style={{ width: 240 }}
-                  onChange={(roles) => updateRole(record.id, roles)}
+                  onChange={(roles) => updateUser(record, { roles })}
                   options={[
                     { label: '普通用户', value: 'normal' },
                     { label: 'VIP 用户', value: 'vip' },
@@ -106,7 +131,7 @@ export default function UsersPage() {
                   value={record.maxSessions || 1}
                   addonAfter="并发"
                   style={{ width: 130 }}
-                  onChange={(value) => updateRole(record.id, record.roles?.length ? record.roles : [record.role], Number(value) || 1)}
+                  onChange={(value) => updateUser(record, { maxSessions: Number(value) || 1 })}
                 />
                 <Popconfirm
                   title="确认删除该用户？"

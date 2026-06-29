@@ -8,6 +8,7 @@ export interface User {
   username: string;
   role: UserRole;
   roles: UserRole[];
+  domainIds?: string[];
   maxSessions: number;
   createdAt: string;
   updatedAt: string;

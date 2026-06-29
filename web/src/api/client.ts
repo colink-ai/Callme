@@ -57,8 +57,8 @@ export const api = {
   logout: () => http.post('/auth/logout'),
   me: () => http.get<{ user: User; version?: string }>('/auth/me').then((r) => r.data),
   listUsers: () => http.get<{ users: User[] | null }>('/users').then((r) => r.data.users ?? []),
-  updateUserRole: (id: string, roles: UserRole[], maxSessions?: number) =>
-    http.put(`/users/${id}/role`, { roles, maxSessions }),
+  updateUserRole: (id: string, roles: UserRole[], maxSessions?: number, domainIds?: string[]) =>
+    http.put(`/users/${id}/role`, { roles, maxSessions, domainIds }),
   deleteUser: (id: string) => http.delete(`/users/${id}`),
 
   // 会话

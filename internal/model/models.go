@@ -21,6 +21,7 @@ type User struct {
 	PasswordHash string     `json:"-"`
 	Role         UserRole   `json:"role"`  // 兼容旧前端/旧接口的主角色
 	Roles        []UserRole `json:"roles"` // 新权限模型：一个用户可拥有多个角色
+	DomainIDs    []string   `json:"domainIds,omitempty"`
 	MaxSessions  int        `json:"maxSessions"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	UpdatedAt    time.Time  `json:"updatedAt"`

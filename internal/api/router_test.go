@@ -164,6 +164,7 @@ func newAPIHarness(t *testing.T) *apiHarness {
 		Feedback: feedbackSvc,
 		Handoff:  handoffSvc,
 		Stats:    statsSvc,
+		AgentCfg: agentCfg,
 		WS:       wsHandler,
 		Logger:   logger,
 		Version:  "test",
@@ -336,6 +337,37 @@ func TestSessionAPIReportsUserConcurrencyLimit(t *testing.T) {
 	}
 	if limitResp.Code != "user_concurrency_limit" || limitResp.MaxSessions != 1 || limitResp.CurrentSessions != 1 {
 		t.Fatalf("unexpected limit response: %+v", limitResp)
+	}
+}
+
+func TestSessionAPIRequiresDomainGrant(t *testing.T) {
+	h := newAPIHarness(t)
+	_, _ = h.register("domain-admin")
+	userToken, user := h.register("domain-user")
+	if err := h.store.UpsertDomain(context.Background(), &model.Domain{ID: "ops", Name: "Ops", Enabled: true}); err != nil {
+		t.Fatalf("upsert domain: %v", err)
+	}
+
+	rr := h.do(http.MethodPost, "/api/v1/sessions", userToken, "", map[string]string{"domainId": "ops"})
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("ungranted domain should be forbidden, got %d %s", rr.Code, rr.Body.String())
+	}
+
+	if err := h.store.SetUserDomains(context.Background(), user.ID, []string{"ops"}); err != nil {
+		t.Fatalf("grant domain: %v", err)
+	}
+	rr = h.do(http.MethodPost, "/api/v1/sessions", userToken, "", map[string]string{"domainId": "ops"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("granted domain should create session, got %d %s", rr.Code, rr.Body.String())
+	}
+	var view struct {
+		DomainID string `json:"domainId"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode session view: %v", err)
+	}
+	if view.DomainID != "ops" {
+		t.Fatalf("session domain = %q", view.DomainID)
 	}
 }
 

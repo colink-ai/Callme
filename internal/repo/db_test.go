@@ -17,7 +17,7 @@ func TestMigrateFreshDB(t *testing.T) {
 	if got := SchemaVersion(db); got < 1 {
 		t.Fatalf("schema version = %d, want >= 1", got)
 	}
-	for _, tbl := range []string{"users", "sessions", "messages", "feedback", "tickets", "settings", "auth_tokens", "goose_db_version"} {
+	for _, tbl := range []string{"users", "sessions", "messages", "feedback", "tickets", "settings", "auth_tokens", "domains", "domain_knowledge_sources", "user_domains", "goose_db_version"} {
 		var name string
 		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, tbl).Scan(&name); err != nil {
 			t.Fatalf("missing table %s: %v", tbl, err)

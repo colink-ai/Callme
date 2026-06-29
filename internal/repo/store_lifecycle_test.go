@@ -40,11 +40,14 @@ func TestStoreLifecycle(t *testing.T) {
 	if got, err := store.GetUser(ctx, "u1"); err != nil || !got.HasRole(model.UserRoleVIP) || got.MaxSessions != 2 {
 		t.Fatalf("GetUser = %+v err=%v", got, err)
 	}
+	if domains, err := store.ListUserDomainIDs(ctx, "u1"); err != nil || len(domains) != 1 || domains[0] != "default" {
+		t.Fatalf("default user domains = %+v err=%v", domains, err)
+	}
 	if got, err := store.GetUserByUsername(ctx, "alice"); err != nil || got.ID != "u1" {
 		t.Fatalf("GetUserByUsername = %+v err=%v", got, err)
 	}
-	if users, err := store.ListUsers(ctx); err != nil || len(users) != 1 {
-		t.Fatalf("ListUsers len=%d err=%v", len(users), err)
+	if users, err := store.ListUsers(ctx); err != nil || len(users) != 1 || len(users[0].DomainIDs) != 1 || users[0].DomainIDs[0] != "default" {
+		t.Fatalf("ListUsers users=%+v err=%v", users, err)
 	}
 	if names, err := store.UsernamesByIDs(ctx, []string{"u1", "missing"}); err != nil || names["u1"] != "alice" {
 		t.Fatalf("UsernamesByIDs = %+v err=%v", names, err)
@@ -60,6 +63,22 @@ func TestStoreLifecycle(t *testing.T) {
 	}
 	if n, err := store.CountUsersByRole(ctx, model.UserRoleAdmin); err != nil || n != 1 {
 		t.Fatalf("CountUsersByRole = %d err=%v", n, err)
+	}
+
+	if err := store.UpsertDomain(ctx, &model.Domain{ID: "ops", Name: "Ops", Enabled: true}); err != nil {
+		t.Fatalf("UpsertDomain ops: %v", err)
+	}
+	if ok, err := store.UserCanUseDomain(ctx, user, "default"); err != nil || !ok {
+		t.Fatalf("default domain access = %v err=%v", ok, err)
+	}
+	if ok, err := store.UserCanUseDomain(ctx, user, "ops"); err != nil || ok {
+		t.Fatalf("ops access before grant = %v err=%v", ok, err)
+	}
+	if err := store.SetUserDomains(ctx, "u1", []string{"ops"}); err != nil {
+		t.Fatalf("SetUserDomains: %v", err)
+	}
+	if ok, err := store.UserCanUseDomain(ctx, user, "ops"); err != nil || !ok {
+		t.Fatalf("ops access after grant = %v err=%v", ok, err)
 	}
 
 	tok := &model.AuthToken{Token: "tok", UserID: "u1", ExpiresAt: now.Add(time.Hour), CreatedAt: now}

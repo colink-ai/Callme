@@ -302,6 +302,10 @@ func (d *Deps) createSession(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "领域不存在或已停用"})
 		return
 	}
+	if ok, err := d.Store.UserCanUseDomain(c.Request.Context(), currentUser(c), req.DomainID); err != nil || !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无权使用该领域"})
+		return
+	}
 	view, err := d.Sessions.CreateSessionInDomain(c.Request.Context(), currentUser(c), req.DomainID)
 	if err != nil {
 		var limitErr *session.UserConcurrencyError
@@ -326,7 +330,15 @@ func (d *Deps) createSession(c *gin.Context) {
 
 func (d *Deps) listDomains(c *gin.Context) {
 	includeDisabled := currentRole(c) == model.UserRoleAdmin && c.Query("includeDisabled") == "true"
-	domains, err := d.Store.ListDomains(c.Request.Context(), includeDisabled)
+	var (
+		domains []*model.Domain
+		err     error
+	)
+	if currentRole(c) == model.UserRoleAdmin && c.Query("all") == "true" {
+		domains, err = d.Store.ListDomains(c.Request.Context(), includeDisabled)
+	} else {
+		domains, err = d.Store.ListDomainsForUser(c.Request.Context(), currentUser(c), includeDisabled)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -342,6 +354,10 @@ func (d *Deps) getDomain(c *gin.Context) {
 		return
 	}
 	if !domain.Enabled && currentRole(c) != model.UserRoleAdmin {
+		c.JSON(http.StatusNotFound, gin.H{"error": "领域不存在"})
+		return
+	}
+	if ok, err := d.Store.UserCanUseDomain(c.Request.Context(), currentUser(c), domain.ID); currentRole(c) != model.UserRoleAdmin && (err != nil || !ok) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "领域不存在"})
 		return
 	}
@@ -670,6 +686,7 @@ func (d *Deps) updateUserRole(c *gin.Context) {
 	var req struct {
 		Role        model.UserRole   `json:"role"`
 		Roles       []model.UserRole `json:"roles"`
+		DomainIDs   *[]string        `json:"domainIds"`
 		MaxSessions int              `json:"maxSessions"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -682,6 +699,12 @@ func (d *Deps) updateUserRole(c *gin.Context) {
 	if err := d.Auth.UpdateRoles(c.Request.Context(), c.Param("id"), req.Roles, req.MaxSessions); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	if req.DomainIDs != nil {
+		if err := d.Store.SetUserDomains(c.Request.Context(), c.Param("id"), *req.DomainIDs); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

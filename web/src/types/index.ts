@@ -116,8 +116,22 @@ export type ChunkType =
   | 'thinking'
   | 'tool_use'
   | 'tool_result'
+  | 'input_json_delta'
   | 'usage'
+  | 'question'
+  | 'permission'
+  | 'artifact'
+  | 'handoff'
   | 'done';
+
+export interface ContentBlock {
+  type?: string;
+  text?: string;
+  mimeType?: string;
+  data?: string;
+  url?: string;
+  metadata?: Record<string, unknown>;
+}
 
 export interface Chunk {
   type: ChunkType;
@@ -126,6 +140,8 @@ export interface Chunk {
   toolId?: string;
   toolInput?: Record<string, unknown>;
   isError?: boolean;
+  toolResultBlocks?: ContentBlock[];
+  metadata?: Record<string, unknown>;
   usage?: {
     inputTokens?: number;
     outputTokens?: number;

@@ -14,20 +14,26 @@ import (
 type ImageContent struct {
 	MimeType string
 	Data     string
+	URL      string
 }
 
 // ChunkType 流式输出块类型
 type ChunkType string
 
 const (
-	ChunkTypeText       ChunkType = "text"
-	ChunkTypeError      ChunkType = "error"
-	ChunkTypeStatus     ChunkType = "status"
-	ChunkTypeThinking   ChunkType = "thinking"    // 思考过程
-	ChunkTypeToolUse    ChunkType = "tool_use"    // 工具调用开始（知识检索引用展示来源）
-	ChunkTypeToolResult ChunkType = "tool_result" // 工具调用结果
-	ChunkTypeUsage      ChunkType = "usage"       // Token 使用更新
-	ChunkTypeDone       ChunkType = "done"        // 单轮回答结束
+	ChunkTypeText           ChunkType = "text"
+	ChunkTypeError          ChunkType = "error"
+	ChunkTypeStatus         ChunkType = "status"
+	ChunkTypeThinking       ChunkType = "thinking"    // 思考过程
+	ChunkTypeToolUse        ChunkType = "tool_use"    // 工具调用开始（知识检索引用展示来源）
+	ChunkTypeToolResult     ChunkType = "tool_result" // 工具调用结果
+	ChunkTypeInputJSONDelta ChunkType = "input_json_delta"
+	ChunkTypeUsage          ChunkType = "usage" // Token 使用更新
+	ChunkTypeQuestion       ChunkType = "question"
+	ChunkTypePermission     ChunkType = "permission"
+	ChunkTypeArtifact       ChunkType = "artifact"
+	ChunkTypeHandoff        ChunkType = "handoff"
+	ChunkTypeDone           ChunkType = "done" // 单轮回答结束
 )
 
 // TokenUsage Token 使用统计
@@ -36,15 +42,28 @@ type TokenUsage struct {
 	OutputTokens int64 `json:"outputTokens,omitempty"`
 }
 
+// ContentBlock preserves rich tool output for future UI surfaces without
+// making session persistence depend on Helios contracts directly.
+type ContentBlock struct {
+	Type     string         `json:"type,omitempty"`
+	Text     string         `json:"text,omitempty"`
+	MimeType string         `json:"mimeType,omitempty"`
+	Data     string         `json:"data,omitempty"`
+	URL      string         `json:"url,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
 // Chunk 流式输出块
 type Chunk struct {
-	Type      ChunkType      `json:"type"`
-	Content   string         `json:"content,omitempty"`
-	ToolName  string         `json:"toolName,omitempty"`
-	ToolID    string         `json:"toolId,omitempty"`
-	ToolInput map[string]any `json:"toolInput,omitempty"`
-	IsError   bool           `json:"isError,omitempty"`
-	Usage     *TokenUsage    `json:"usage,omitempty"`
+	Type             ChunkType      `json:"type"`
+	Content          string         `json:"content,omitempty"`
+	ToolName         string         `json:"toolName,omitempty"`
+	ToolID           string         `json:"toolId,omitempty"`
+	ToolInput        map[string]any `json:"toolInput,omitempty"`
+	IsError          bool           `json:"isError,omitempty"`
+	Usage            *TokenUsage    `json:"usage,omitempty"`
+	ToolResultBlocks []ContentBlock `json:"toolResultBlocks,omitempty"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
 }
 
 // AgentSpec Agent 运行配置（模型切换的载体：改这里 + 重启会话即可换模型）

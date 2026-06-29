@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -98,6 +99,28 @@ func newAPIHarness(t *testing.T) *apiHarness {
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.URL.Host == "callme-ai.test" && req.URL.Path == "/chat/completions" {
+			data, _ := io.ReadAll(req.Body)
+			reqBody := string(data)
+			if strings.Contains(reqBody, `"stream":true`) && strings.Contains(reqBody, "Runtime 自学习") {
+				body := "data: {\"choices\":[{\"delta\":{\"content\":\"# Revised\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" Runtime\"}}]}\n\ndata: [DONE]\n\n"
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Request:    req,
+				}, nil
+			}
+			if strings.Contains(reqBody, "Runtime 自学习") {
+				body := `{"choices":[{"message":{"content":"# Revised Runtime"}}]}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Request:    req,
+				}, nil
+			}
 			body := `{"choices":[{"message":{"content":"{\"title\":\"测试知识\",\"question\":\"如何验证知识沉淀？\",\"content\":\"## 处理步骤\\n\\n1. 使用候选知识流程。\\n2. 审批后发布正式知识。\",\"confidence\":0.9,\"reason\":\"集成测试\"}"}}]}`
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -368,6 +391,81 @@ func TestSessionAPIRequiresDomainGrant(t *testing.T) {
 	}
 	if view.DomainID != "ops" {
 		t.Fatalf("session domain = %q", view.DomainID)
+	}
+}
+
+func TestDomainManagementRoutes(t *testing.T) {
+	h := newAPIHarness(t)
+	adminToken, _ := h.register("domains-admin")
+	userToken, user := h.register("domains-user")
+
+	rr := h.do(http.MethodGet, "/api/v1/domains", userToken, "", nil)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), model.DefaultDomainID) {
+		t.Fatalf("normal user should see default domain, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPost, "/api/v1/domains", userToken, "", map[string]any{"name": "Ops"})
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("normal user should not create domain, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPost, "/api/v1/domains", adminToken, string(model.UserRoleAdmin), map[string]any{
+		"name":        "Ops Domain",
+		"description": "operations domain",
+		"enabled":     true,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("admin create domain status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var created model.Domain
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created domain: %v", err)
+	}
+	if created.ID == "" || created.Name != "Ops Domain" {
+		t.Fatalf("unexpected created domain: %+v", created)
+	}
+
+	rr = h.do(http.MethodPut, "/api/v1/domains/"+created.ID+"/sources/kb-http", adminToken, string(model.UserRoleAdmin), map[string]any{
+		"name":    "HTTP KB",
+		"type":    "http",
+		"url":     "http://127.0.0.1:9100/mcp",
+		"headers": map[string]string{"Authorization": "Bearer test"},
+		"enabled": true,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("upsert source status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodGet, "/api/v1/domains/"+created.ID, adminToken, string(model.UserRoleAdmin), nil)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "HTTP KB") {
+		t.Fatalf("get domain should include source, got %d %s", rr.Code, rr.Body.String())
+	}
+
+	rr = h.do(http.MethodGet, "/api/v1/domains/"+created.ID, userToken, "", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("ungranted user should not discover domain, got %d %s", rr.Code, rr.Body.String())
+	}
+	if err := h.store.SetUserDomains(context.Background(), user.ID, []string{created.ID}); err != nil {
+		t.Fatalf("grant domain: %v", err)
+	}
+	rr = h.do(http.MethodGet, "/api/v1/domains/"+created.ID, userToken, "", nil)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "operations domain") {
+		t.Fatalf("granted user should read domain, got %d %s", rr.Code, rr.Body.String())
+	}
+
+	rr = h.do(http.MethodPut, "/api/v1/domains/"+created.ID, adminToken, string(model.UserRoleAdmin), map[string]any{
+		"id":          created.ID,
+		"name":        "Ops Domain Updated",
+		"description": "updated",
+		"enabled":     true,
+	})
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "Ops Domain Updated") {
+		t.Fatalf("upsert domain status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodDelete, "/api/v1/domains/"+created.ID+"/sources/kb-http", adminToken, string(model.UserRoleAdmin), nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("delete source status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodGet, "/api/v1/domains/"+created.ID, adminToken, string(model.UserRoleAdmin), nil)
+	if rr.Code != http.StatusOK || strings.Contains(rr.Body.String(), "HTTP KB") {
+		t.Fatalf("deleted source should be absent, got %d %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -642,5 +740,212 @@ func TestKnowledgeFeedbackHandoffAndUserRoutes(t *testing.T) {
 	rr = h.do(http.MethodPost, "/api/v1/auth/login", "", "", map[string]string{"username": "ops-user", "password": "wrong"})
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("bad login should fail, got %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAPIBoundaryRoutesAndValidation(t *testing.T) {
+	h := newAPIHarness(t)
+	adminToken, _ := h.register("boundary-admin")
+	userToken, user := h.register("boundary-user")
+
+	rr := h.do(http.MethodGet, "/api/v1/agent/capabilities", userToken, "", nil)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"defaultModel":"test-model"`) {
+		t.Fatalf("agent capabilities status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodGet, "/api/v1/sessions/current", userToken, "", nil)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"session":null`) {
+		t.Fatalf("empty current session status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	rr = h.do(http.MethodPost, "/api/v1/sessions", userToken, "", map[string]string{"domainId": "missing"})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("missing domain should be rejected, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPost, "/api/v1/sessions", userToken, "", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create session status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var sess model.Session
+	if err := json.Unmarshal(rr.Body.Bytes(), &sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	rr = h.do(http.MethodDelete, "/api/v1/sessions/"+sess.ID+"/history", userToken, "", nil)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("delete active history should conflict, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPost, "/api/v1/sessions/"+sess.ID+"/continue", userToken, "", nil)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("continue active session should conflict, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodDelete, "/api/v1/sessions/missing", userToken, "", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("delete missing session should 404, got %d %s", rr.Code, rr.Body.String())
+	}
+	if err := h.store.CreateMessage(context.Background(), &model.Message{ID: "boundary-msg", SessionID: sess.ID, Role: model.MessageRoleAssistant, Content: "answer", CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("create message: %v", err)
+	}
+	rr = h.do(http.MethodDelete, "/api/v1/sessions/"+sess.ID, userToken, "", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("close session status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodDelete, "/api/v1/sessions/"+sess.ID+"/history", userToken, "", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("delete closed history status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodGet, "/api/v1/sessions/"+sess.ID, userToken, "", nil)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("deleted history should be gone, got %d %s", rr.Code, rr.Body.String())
+	}
+
+	rr = h.do(http.MethodPut, "/api/v1/users/"+user.ID+"/role", adminToken, string(model.UserRoleAdmin), map[string]any{
+		"role":      model.UserRoleVIP,
+		"domainIds": []string{model.DefaultDomainID},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("legacy role update status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPut, "/api/v1/users/"+user.ID+"/role", adminToken, string(model.UserRoleAdmin), map[string]any{
+		"roles": []model.UserRole{"bad-role"},
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("bad role update should fail, got %d %s", rr.Code, rr.Body.String())
+	}
+
+	rr = h.do(http.MethodPut, "/api/v1/settings/pool", adminToken, string(model.UserRoleAdmin), map[string]any{
+		"maxActive": 0,
+		"maxQueue":  -1,
+	})
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"maxActive":1`) || !strings.Contains(rr.Body.String(), `"maxQueue":0`) {
+		t.Fatalf("pool normalization status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPut, "/api/v1/settings/pool", adminToken, string(model.UserRoleAdmin), "not-object")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("bad pool payload should fail, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPut, "/api/v1/settings/agent", adminToken, string(model.UserRoleAdmin), nil)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("empty agent settings should fail, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPut, "/api/v1/settings/agent", adminToken, string(model.UserRoleAdmin), map[string]any{
+		"activeProfileId": "secondary",
+		"profiles": []map[string]any{{
+			"id":   "secondary",
+			"name": "Secondary",
+			"settings": map[string]any{
+				"type":         "api_fake",
+				"defaultModel": "profile-model",
+				"apiUrl":       "http://callme-ai.test",
+				"apiToken":     "profile-token",
+			},
+		}},
+	})
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "profile-model") {
+		t.Fatalf("profile settings update status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	rr = h.do(http.MethodGet, "/api/v1/admin/sessions/closed?start=2026-01-02T00:00:00Z&end=2026-01-01T00:00:00Z&page=0&pageSize=999", adminToken, string(model.UserRoleAdmin), nil)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("inverted closed-session range should fail, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodGet, "/api/v1/admin/sessions/closed?end=bad", adminToken, string(model.UserRoleAdmin), nil)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("bad end time should fail, got %d %s", rr.Code, rr.Body.String())
+	}
+
+	rr = h.do(http.MethodPost, "/api/v1/feedback", userToken, "", map[string]any{
+		"sessionId": "missing",
+		"messageId": "missing",
+		"rating":    model.FeedbackDown,
+	})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("feedback missing session should 404, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPost, "/api/v1/learning/manual-drafts", adminToken, string(model.UserRoleAdmin), map[string]any{})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("empty manual draft should fail, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPost, "/api/v1/learning/manual-drafts/stream", adminToken, string(model.UserRoleAdmin), map[string]any{})
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"type":"error"`) {
+		t.Fatalf("empty manual draft stream should emit error, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPut, "/api/v1/learning/candidates/missing", adminToken, string(model.UserRoleAdmin), map[string]string{"title": "x"})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("update missing candidate should fail, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPost, "/api/v1/learning/candidates/missing/review", adminToken, string(model.UserRoleAdmin), map[string]any{"approve": false})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("review missing candidate should fail, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPost, "/api/v1/sessions/missing/handoff", userToken, "", map[string]string{"reason": "x"})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("handoff missing session should 404, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodGet, "/api/v1/tickets?limit=bad", adminToken, string(model.UserRoleAdmin), nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("bad ticket limit falls back to zero/empty list, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodGet, "/api/v1/stats/daily?days=bad", adminToken, string(model.UserRoleAdmin), nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("bad stats days should still return response, got %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRuntimeLearningAssetAPIRoutes(t *testing.T) {
+	h := newAPIHarness(t)
+	adminToken, _ := h.register("runtime-admin")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "skills", "demo", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir asset dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("# Demo\nold\n"), 0o644); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+	asset := &model.RuntimeLearningAsset{
+		ID:          "api-runtime-asset",
+		AgentType:   "hermes",
+		AssetType:   model.RuntimeLearningAssetSkill,
+		Path:        path,
+		ContentHash: "hash",
+		ChangeType:  model.RuntimeLearningChangeNew,
+		RiskFlags:   "[]",
+		Status:      model.RuntimeLearningStatusPendingReview,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	if err := h.store.CreateRuntimeLearningAsset(context.Background(), asset); err != nil {
+		t.Fatalf("create runtime asset: %v", err)
+	}
+
+	rr := h.do(http.MethodGet, "/api/v1/learning/runtime-assets?status=pending_review", adminToken, string(model.UserRoleAdmin), nil)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "api-runtime-asset") {
+		t.Fatalf("list runtime assets status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPost, "/api/v1/learning/runtime-assets/"+asset.ID+"/assist-edit", adminToken, string(model.UserRoleAdmin), map[string]string{
+		"instruction": "改写",
+	})
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "Revised") {
+		t.Fatalf("assist runtime asset status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPost, "/api/v1/learning/runtime-assets/"+asset.ID+"/assist-edit/stream", adminToken, string(model.UserRoleAdmin), map[string]string{
+		"instruction": "流式改写",
+	})
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"type":"done"`) {
+		t.Fatalf("assist stream runtime asset status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	rr = h.do(http.MethodPost, "/api/v1/learning/runtime-assets/"+asset.ID+"/review", adminToken, string(model.UserRoleAdmin), map[string]string{
+		"action":  "modify",
+		"note":    "ok",
+		"content": "# Demo\nnew",
+	})
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), string(model.RuntimeLearningStatusModified)) {
+		t.Fatalf("review modify runtime asset status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read modified asset: %v", err)
+	}
+	if string(data) != "# Demo\nnew\n" {
+		t.Fatalf("asset file not modified: %q", string(data))
 	}
 }

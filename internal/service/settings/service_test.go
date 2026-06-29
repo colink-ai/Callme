@@ -170,3 +170,70 @@ func TestAgentSpecUsesRuntimeRootDefaultDomain(t *testing.T) {
 		t.Fatalf("runtime home = %q, want %q", spec.RuntimeHome, want)
 	}
 }
+
+func TestAgentProfilesNormalizationEdges(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newSettingsService(t)
+	if err := svc.UpdateAgentProfiles(ctx, model.AgentProfilesSettings{}); err != nil {
+		t.Fatalf("empty profiles should normalize to current default: %v", err)
+	}
+	if profiles := svc.GetAgentProfiles(); len(profiles.Profiles) != 1 || profiles.ActiveProfileID == "" {
+		t.Fatalf("empty profiles not normalized: %+v", profiles)
+	}
+
+	err := svc.UpdateAgentProfiles(ctx, model.AgentProfilesSettings{
+		ActiveProfileID: "missing",
+		Profiles: []model.AgentProfile{{
+			ID:   "",
+			Name: "",
+			Settings: model.AgentSettings{
+				Type:         "",
+				CliPath:      "",
+				DefaultModel: "edge-model",
+				APIURL:       "https://edge.example/v1",
+				APIToken:     "tiny",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("normalize edge profile: %v", err)
+	}
+	profiles := svc.GetAgentProfiles()
+	if profiles.ActiveProfileID != profiles.Profiles[0].ID {
+		t.Fatalf("missing active id should fall back to first profile: %+v", profiles)
+	}
+	if profiles.Profiles[0].Name == "" || profiles.Profiles[0].Settings.Type != "hermes" || profiles.Profiles[0].Settings.CliPath != "hermes" {
+		t.Fatalf("profile defaults not filled: %+v", profiles.Profiles[0])
+	}
+	if profiles.Profiles[0].Settings.APIToken != "****" {
+		t.Fatalf("short token should be fully masked, got %q", profiles.Profiles[0].Settings.APIToken)
+	}
+}
+
+func TestUpdateAgentSettingsDefaultPathAndMaskedToken(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newSettingsService(t)
+	if err := svc.UpdateAgentSettings(ctx, model.AgentSettings{
+		Type:         "hermes",
+		DefaultModel: "no-cli-model",
+		APIURL:       "https://example.test/v1",
+		APIToken:     "****",
+	}); err != nil {
+		t.Fatalf("update default cli: %v", err)
+	}
+	spec := svc.AgentSpec()
+	if spec.CliPath != "hermes" || spec.APIToken != "secret-token" || spec.DefaultModel != "no-cli-model" {
+		t.Fatalf("default cli or token retention failed: %+v", spec)
+	}
+	if err := svc.UpdateAgentSettings(ctx, model.AgentSettings{
+		Type:         "custom",
+		DefaultModel: "custom-model",
+		APIURL:       "https://custom.example/v1",
+		APIToken:     "",
+	}); err != nil {
+		t.Fatalf("update custom type: %v", err)
+	}
+	if spec := svc.AgentSpec(); spec.Type != "custom" || spec.CliPath != "" || spec.APIToken != "secret-token" {
+		t.Fatalf("custom type should keep empty cli and retained token: %+v", spec)
+	}
+}

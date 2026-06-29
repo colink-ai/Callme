@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -83,6 +84,32 @@ func (stubSettings) PoolSettings() model.PoolSettings {
 	return model.PoolSettings{MaxActive: 1, MaxQueue: 5}
 }
 
+type configurableSettings struct {
+	spec agent.AgentSpec
+	pool model.PoolSettings
+}
+
+func (s configurableSettings) AgentSpec() agent.AgentSpec {
+	if s.spec.Type == "" {
+		s.spec.Type = "fake"
+	}
+	return s.spec
+}
+
+func (s configurableSettings) PoolSettings() model.PoolSettings {
+	return s.pool
+}
+
+type promptErrorAdapter struct {
+	fakeAdapter
+	err error
+}
+
+func (f *promptErrorAdapter) Prompt(ctx context.Context, sessionID string, input string, images []agent.ImageContent, onChunk func(agent.Chunk)) error {
+	onChunk(agent.Chunk{Type: agent.ChunkTypeText, Content: "partial"})
+	return f.err
+}
+
 func newTestManager(t *testing.T) (*Manager, *repo.Store) {
 	t.Helper()
 
@@ -108,12 +135,45 @@ func newTestManager(t *testing.T) (*Manager, *repo.Store) {
 	return m, store
 }
 
+func newConfiguredTestManager(t *testing.T, settings SettingsProvider, factory AdapterFactory) (*Manager, *repo.Store) {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := repo.Open("sqlite", filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := repo.NewStore(db)
+	cfg := config.SessionConfig{
+		MaxActive:      1,
+		MaxQueue:       1,
+		IdleWarnAfter:  20 * time.Millisecond,
+		IdleCloseAfter: 60 * time.Millisecond,
+		MaxDuration:    time.Hour,
+		MaxPerClient:   1,
+	}
+	agentCfg := config.AgentConfig{WorkDir: filepath.Join(dir, "workdir"), RuntimeRoot: filepath.Join(dir, "runtime")}
+	m := NewManager(cfg, agentCfg, store, settings, factory, func(domainID string) []agent.MCPServerSpec {
+		return []agent.MCPServerSpec{{Name: "kb", Type: "http", URL: "http://127.0.0.1:9100/mcp"}}
+	}, zap.NewNop())
+	t.Cleanup(m.Shutdown)
+	return m, store
+}
+
 func fakeAdapterFactory(agent.AgentSpec) (agent.Adapter, error) {
 	return &fakeAdapter{
 		sessions:     make(map[string]bool),
 		agentIDs:     make(map[string]string),
 		nativeResume: make(map[string]bool),
 	}, nil
+}
+
+func newFakeAdapter() *fakeAdapter {
+	return &fakeAdapter{
+		sessions:     make(map[string]bool),
+		agentIDs:     make(map[string]string),
+		nativeResume: make(map[string]bool),
+	}
 }
 
 func TestSeatLimitAndQueue(t *testing.T) {
@@ -166,6 +226,52 @@ func TestSeatLimitAndQueue(t *testing.T) {
 			t.Fatalf("session 2 not admitted: active=%d queued=%d", active, queued)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestQueueFullVIPAndQueuedClose(t *testing.T) {
+	settings := configurableSettings{
+		spec: agent.AgentSpec{Type: "fake", CliPath: "fake", DefaultModel: "test-model"},
+		pool: model.PoolSettings{MaxActive: 1, MaxQueue: 1},
+	}
+	m, store := newConfiguredTestManager(t, settings, func(agent.AgentSpec) (agent.Adapter, error) {
+		return newFakeAdapter(), nil
+	})
+	ctx := context.Background()
+	active, err := m.CreateSession(ctx, testUser("active-user", model.UserRoleNormal))
+	if err != nil {
+		t.Fatalf("create active: %v", err)
+	}
+	queued, err := m.CreateSession(ctx, testUser("queued-user", model.UserRoleNormal))
+	if err != nil {
+		t.Fatalf("create queued: %v", err)
+	}
+	if _, err := m.CreateSession(ctx, testUser("overflow-user", model.UserRoleNormal)); err != ErrQueueFull {
+		t.Fatalf("overflow should hit queue full, got %v", err)
+	}
+	vip := &model.User{ID: "vip-user", Username: "vip-user", Role: model.UserRoleVIP, Roles: []model.UserRole{model.UserRoleVIP}}
+	vipView, err := m.CreateSession(ctx, vip)
+	if err != nil {
+		t.Fatalf("vip should bypass full queue: %v", err)
+	}
+	if vipView.Status != model.SessionStatusActive {
+		t.Fatalf("vip status = %s", vipView.Status)
+	}
+	if err := m.CloseSession(ctx, queued.ID, model.CloseReasonUser); err != nil {
+		t.Fatalf("close queued: %v", err)
+	}
+	closedQueued, err := store.GetSession(ctx, queued.ID)
+	if err != nil {
+		t.Fatalf("get closed queued: %v", err)
+	}
+	if closedQueued.CloseReason != model.CloseReasonQueueLeave {
+		t.Fatalf("queued close reason = %s", closedQueued.CloseReason)
+	}
+	if err := m.CloseSession(ctx, active.ID, model.CloseReasonUser); err != nil {
+		t.Fatalf("close active: %v", err)
+	}
+	if err := m.CloseSession(ctx, "missing", model.CloseReasonUser); err != ErrSessionGone {
+		t.Fatalf("close missing should return ErrSessionGone, got %v", err)
 	}
 }
 
@@ -378,6 +484,10 @@ func TestValidationAndStopBoundaries(t *testing.T) {
 	if err := validateImages([]model.ImageContent{{MimeType: "image/png", Data: "aA=="}}); err != nil {
 		t.Fatalf("valid image rejected: %v", err)
 	}
+	tooLarge := strings.Repeat("a", maxImageBytes+1)
+	if err := validateImages([]model.ImageContent{{MimeType: "image/png", Data: base64.StdEncoding.EncodeToString([]byte(tooLarge))}}); err == nil || !strings.Contains(err.Error(), "10MB") {
+		t.Fatalf("expected image size validation error, got %v", err)
+	}
 
 	v, err := m.CreateSession(ctx, testUser("stopper", model.UserRoleNormal))
 	if err != nil {
@@ -394,6 +504,103 @@ func TestValidationAndStopBoundaries(t *testing.T) {
 	}
 	if err := m.HandleUserMessage(ctx, v.ID, "看图", []model.ImageContent{{MimeType: "image/png", Data: "aA=="}}); err == nil || !strings.Contains(err.Error(), "不支持图片输入") {
 		t.Fatalf("non-multimodal model should reject images, got %v", err)
+	}
+}
+
+func TestPromptErrorNotifiesAndDoesNotPersistAssistant(t *testing.T) {
+	settings := configurableSettings{
+		spec: agent.AgentSpec{Type: "fake", CliPath: "fake", DefaultModel: "test-model", SupportsMultimodal: true, SystemPrompt: "system prompt"},
+		pool: model.PoolSettings{MaxActive: 1, MaxQueue: 1},
+	}
+	promptErr := errors.New("provider unavailable")
+	m, store := newConfiguredTestManager(t, settings, func(agent.AgentSpec) (agent.Adapter, error) {
+		return &promptErrorAdapter{fakeAdapter: *newFakeAdapter(), err: promptErr}, nil
+	})
+	ctx := context.Background()
+	v, err := m.CreateSessionInDomain(ctx, testUser("prompt-error", model.UserRoleNormal), "ops")
+	if err != nil {
+		t.Fatalf("create session in domain: %v", err)
+	}
+	var events []Event
+	if _, err := m.Subscribe(v.ID, func(ev Event) { events = append(events, ev) }); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	err = m.HandleUserMessage(ctx, v.ID, "", []model.ImageContent{{MimeType: "image/png", Data: "aA=="}})
+	if !errors.Is(err, promptErr) {
+		t.Fatalf("prompt error = %v", err)
+	}
+	msgs, err := store.ListMessages(ctx, v.ID)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Content != "" || !strings.Contains(msgs[0].ToolCalls, "image/png") {
+		t.Fatalf("only user image message should be persisted, got %+v", msgs)
+	}
+	var sawError bool
+	for _, ev := range events {
+		if ev.Type == EventError {
+			sawError = true
+		}
+	}
+	if !sawError {
+		t.Fatalf("expected error event, got %+v", events)
+	}
+}
+
+func TestActivationFailureClosesPersistedSession(t *testing.T) {
+	settings := configurableSettings{
+		spec: agent.AgentSpec{Type: "fake", CliPath: "fake", DefaultModel: ""},
+		pool: model.PoolSettings{MaxActive: 1, MaxQueue: 1},
+	}
+	m, store := newConfiguredTestManager(t, settings, func(agent.AgentSpec) (agent.Adapter, error) {
+		t.Fatal("adapter factory should not be called without model")
+		return nil, nil
+	})
+	ctx := context.Background()
+	_, err := m.CreateSession(ctx, testUser("no-model", model.UserRoleNormal))
+	if err == nil || !strings.Contains(err.Error(), "配置 Agent 模型") {
+		t.Fatalf("missing model should fail activation, got %v", err)
+	}
+	sessions, err := store.ListSessionsByUser(ctx, "no-model", 10)
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("persisted failed session len=%d err=%v", len(sessions), err)
+	}
+	if sessions[0].Status != model.SessionStatusClosed || sessions[0].CloseReason != model.CloseReasonError {
+		t.Fatalf("failed activation should close session: %+v", sessions[0])
+	}
+}
+
+func TestReapIdleWarnsAndCloses(t *testing.T) {
+	m, _ := newTestManager(t)
+	ctx := context.Background()
+	warned, err := m.CreateSession(ctx, testUser("idle-warn", model.UserRoleNormal))
+	if err != nil {
+		t.Fatalf("create warned: %v", err)
+	}
+	var sawWarning bool
+	if _, err := m.Subscribe(warned.ID, func(ev Event) {
+		if ev.Type == EventIdleWarning {
+			sawWarning = true
+		}
+	}); err != nil {
+		t.Fatalf("subscribe warned: %v", err)
+	}
+	l := m.find(warned.ID)
+	l.mu.Lock()
+	l.lastActivity = time.Now().Add(-m.cfg.IdleWarnAfter - time.Second)
+	l.mu.Unlock()
+	m.reapIdle()
+	if !sawWarning {
+		t.Fatal("expected idle warning event")
+	}
+
+	l.mu.Lock()
+	l.lastActivity = time.Now().Add(-m.cfg.IdleCloseAfter - time.Second)
+	l.mu.Unlock()
+	m.reapIdle()
+	closed, _ := m.store.GetSession(ctx, warned.ID)
+	if closed.Status != model.SessionStatusClosed || closed.CloseReason != model.CloseReasonIdle {
+		t.Fatalf("expected idle close, got %+v", closed)
 	}
 }
 

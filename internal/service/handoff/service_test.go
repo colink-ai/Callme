@@ -2,6 +2,7 @@ package handoff
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -116,5 +117,67 @@ func TestCreateTicketMissingSession(t *testing.T) {
 	svc := NewService(newHandoffStore(t), config.HandoffConfig{}, zap.NewNop())
 	if _, err := svc.CreateTicket(context.Background(), "missing", "reason"); err == nil {
 		t.Fatal("missing session should fail")
+	}
+}
+
+func TestNotifyWebhookFailureStatuses(t *testing.T) {
+	for name, transport := range map[string]http.RoundTripper{
+		"network": roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return nil, errors.New("network down")
+		}),
+		"status": roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusBadGateway,
+				Body:       io.NopCloser(strings.NewReader(`bad`)),
+				Request:    req,
+			}, nil
+		}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := newHandoffStore(t)
+			seedHandoffSession(t, store)
+			svc := NewService(store, config.HandoffConfig{WebhookURL: "http://callme-webhook.test/ticket"}, zap.NewNop())
+			svc.client = &http.Client{Transport: transport}
+			ticket, err := svc.CreateTicket(context.Background(), "s1", "webhook")
+			if err != nil {
+				t.Fatalf("CreateTicket: %v", err)
+			}
+			deadline := time.Now().Add(time.Second)
+			for {
+				tickets, _ := store.ListTickets(context.Background(), 10)
+				if len(tickets) == 1 && tickets[0].Status == model.TicketStatusFailed {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("ticket %s was not marked failed, tickets=%+v", ticket.ID, tickets)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
+	}
+}
+
+func TestListTicketsDefaultLimitAndTranscriptRoles(t *testing.T) {
+	store := newHandoffStore(t)
+	ctx := context.Background()
+	now := time.Now()
+	sess := &model.Session{ID: "s-system", ClientID: "client", UserID: "u1", Status: model.SessionStatusActive, CreatedAt: now}
+	if err := store.CreateSession(ctx, sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := store.CreateMessage(ctx, &model.Message{ID: "sys", SessionID: sess.ID, Role: model.MessageRoleSystem, Content: "system note", CreatedAt: now}); err != nil {
+		t.Fatalf("create system message: %v", err)
+	}
+	svc := NewService(store, config.HandoffConfig{}, zap.NewNop())
+	ticket, err := svc.CreateTicket(ctx, sess.ID, "")
+	if err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+	if !strings.Contains(ticket.Transcript, "用户") || strings.Contains(ticket.Transcript, "AI客服") {
+		t.Fatalf("system/other roles should be labeled as user by default: %q", ticket.Transcript)
+	}
+	tickets, err := svc.ListTickets(ctx, -1)
+	if err != nil || len(tickets) != 1 {
+		t.Fatalf("default list tickets len=%d err=%v", len(tickets), err)
 	}
 }

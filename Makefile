@@ -1,7 +1,7 @@
-.PHONY: build build-server build-web test test-coverage test-web test-e2e test-all run run-all dev-web mock-kb clean start stop status package package-arm64
+.PHONY: build build-server build-web test test-coverage test-integration-ai test-web test-e2e test-all run run-all dev-web mock-kb clean start stop status package package-arm64
 
 VERSION := $(shell cat VERSION 2>/dev/null || echo dev)
-COVERAGE_THRESHOLD ?= 75.0
+COVERAGE_THRESHOLD ?= 80.0
 
 # 完整构建：前端 + 后端
 build: build-web build-server
@@ -21,6 +21,9 @@ test-coverage:
 	@coverage=$$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%","",$$3); print $$3}'); \
 	  awk -v cov="$$coverage" -v min="$(COVERAGE_THRESHOLD)" 'BEGIN { exit !(cov+0 >= min+0) }' && \
 	  echo "internal coverage $$coverage% >= $(COVERAGE_THRESHOLD)%"
+
+test-integration-ai:
+	CALLME_REAL_AI_TEST=1 go test -tags=integration ./internal/service/feedback -run TestRealAI
 
 test-web:
 	cd web && npm run build:check

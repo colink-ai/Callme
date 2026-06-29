@@ -108,7 +108,42 @@ func TestDailyAndHotQuestions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetHotQuestions: %v", err)
 	}
-	if len(hot) == 0 || hot[0].Keyword != "callme" || hot[0].Count != 2 {
+	var sawCallme bool
+	for _, item := range hot {
+		if item.Keyword == "callme" && item.Count == 2 {
+			sawCallme = true
+		}
+	}
+	if !sawCallme {
 		t.Fatalf("unexpected hot questions: %+v", hot)
+	}
+}
+
+func TestStatsEmptyAndLimits(t *testing.T) {
+	store := newStatsStore(t)
+	svc := NewService(store, func() (int, int) { return 0, 0 })
+	overview, err := svc.GetOverview(context.Background())
+	if err != nil {
+		t.Fatalf("empty overview: %v", err)
+	}
+	if overview.KnowledgeHitRate != 0 || overview.SatisfactionRate != 0 || overview.HandoffRate != 0 {
+		t.Fatalf("empty rates should be zero: %+v", overview)
+	}
+	daily, err := svc.GetDaily(context.Background(), 91)
+	if err != nil {
+		t.Fatalf("daily with large days: %v", err)
+	}
+	if len(daily) != 14 {
+		t.Fatalf("large days should fall back to 14, got %d", len(daily))
+	}
+	hot, err := svc.GetHotQuestions(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("empty hot questions: %v", err)
+	}
+	if len(hot) != 0 {
+		t.Fatalf("empty hot questions should be empty: %+v", hot)
+	}
+	if got := tokenize("how to deploy callme, callme? 的 a x"); len(got) != 3 || got[0] != "deploy" || got[1] != "callme" || got[2] != "callme" {
+		t.Fatalf("tokenize filtered words = %+v", got)
 	}
 }

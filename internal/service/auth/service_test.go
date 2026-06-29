@@ -103,3 +103,56 @@ func TestUpdateRolesAndDeleteUserGuards(t *testing.T) {
 		t.Fatalf("users after delete len=%d err=%v", len(users), err)
 	}
 }
+
+func TestAuthValidationAndAdminGuards(t *testing.T) {
+	ctx := context.Background()
+	svc, store := newAuthService(t, time.Hour)
+	if _, err := svc.Register(ctx, " ", "pass1234"); err == nil {
+		t.Fatal("empty username should fail")
+	}
+	if _, err := svc.Register(ctx, "short", "123"); err == nil {
+		t.Fatal("short password should fail")
+	}
+	admin, err := svc.Register(ctx, "admin", "pass1234")
+	if err != nil {
+		t.Fatalf("register admin: %v", err)
+	}
+	secondAdmin, err := svc.Register(ctx, "admin2", "pass1234")
+	if err != nil {
+		t.Fatalf("register second: %v", err)
+	}
+	if err := svc.UpdateRole(ctx, secondAdmin.User.ID, model.UserRoleAdmin); err != nil {
+		t.Fatalf("promote second admin: %v", err)
+	}
+	if err := svc.UpdateRoles(ctx, secondAdmin.User.ID, []model.UserRole{model.UserRoleVIP}, 51); err == nil {
+		t.Fatal("max sessions over 50 should fail")
+	}
+	if err := svc.UpdateRole(ctx, secondAdmin.User.ID, model.UserRoleVIP); err != nil {
+		t.Fatalf("demote second admin while another admin exists: %v", err)
+	}
+	if err := svc.DeleteUser(ctx, admin.User.ID, ""); err == nil {
+		t.Fatal("empty delete id should fail")
+	}
+	if err := svc.DeleteUser(ctx, admin.User.ID, "missing"); err == nil {
+		t.Fatal("delete missing user should fail")
+	}
+	if err := svc.DeleteUser(ctx, secondAdmin.User.ID, admin.User.ID); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("delete last admin error = %v", err)
+	}
+	if err := svc.Logout(ctx, ""); err != nil {
+		t.Fatalf("empty logout should be no-op: %v", err)
+	}
+	if _, err := svc.UserByToken(ctx, ""); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("empty token error = %v", err)
+	}
+	if verifyPassword("pass", "bad-format") {
+		t.Fatal("bad stored hash should not verify")
+	}
+	u, err := store.GetUser(ctx, secondAdmin.User.ID)
+	if err != nil {
+		t.Fatalf("get second admin: %v", err)
+	}
+	if !u.HasRole(model.UserRoleVIP) || u.HasRole(model.UserRoleAdmin) {
+		t.Fatalf("second admin should now be vip only: %+v", u)
+	}
+}

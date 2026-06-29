@@ -23,6 +23,9 @@ func TestServiceTypesAndDefaultPath(t *testing.T) {
 	if _, err := svc.NewAdapter(agent.AgentSpec{Type: "custom"}); err == nil {
 		t.Fatalf("custom agent should be rejected by Callme runtime; add it as a Helios adapter instead")
 	}
+	if err := svc.CheckHealth(context.Background(), agent.AgentSpec{Type: "custom"}); err == nil {
+		t.Fatalf("custom agent health check should be rejected")
+	}
 }
 
 func TestServiceUsesSharedAdapter(t *testing.T) {
@@ -89,6 +92,45 @@ func TestHeliosSpecConversions(t *testing.T) {
 	images := toHeliosImages([]agent.ImageContent{{MimeType: "image/png", Data: "aW1n", URL: "https://example.test/image.png"}})
 	if len(images) != 1 || images[0].MimeType != "image/png" || images[0].Data != "aW1n" || images[0].URL == "" {
 		t.Fatalf("unexpected helios images: %+v", images)
+	}
+	if runtimeHome(agent.AgentSpec{RuntimeHome: "/runtime", HermesHome: "/hermes"}) != "/runtime" {
+		t.Fatal("RuntimeHome should take precedence")
+	}
+	if runtimeHome(agent.AgentSpec{HermesHome: "/hermes"}) != "/hermes" {
+		t.Fatal("HermesHome should be fallback runtime home")
+	}
+}
+
+func TestFromHeliosChunkTypesAndUsageNil(t *testing.T) {
+	cases := []struct {
+		in   helioscontracts.ChunkType
+		want agent.ChunkType
+	}{
+		{helioscontracts.ChunkText, agent.ChunkTypeText},
+		{helioscontracts.ChunkError, agent.ChunkTypeError},
+		{helioscontracts.ChunkThinking, agent.ChunkTypeThinking},
+		{helioscontracts.ChunkToolUse, agent.ChunkTypeToolUse},
+		{helioscontracts.ChunkToolResult, agent.ChunkTypeToolResult},
+		{helioscontracts.ChunkInputJSONDelta, agent.ChunkTypeInputJSONDelta},
+		{helioscontracts.ChunkUsage, agent.ChunkTypeUsage},
+		{helioscontracts.ChunkQuestion, agent.ChunkTypeQuestion},
+		{helioscontracts.ChunkPermission, agent.ChunkTypePermission},
+		{helioscontracts.ChunkArtifact, agent.ChunkTypeArtifact},
+		{helioscontracts.ChunkHandoff, agent.ChunkTypeHandoff},
+		{helioscontracts.ChunkDone, agent.ChunkTypeDone},
+		{helioscontracts.ChunkType("unknown"), agent.ChunkTypeStatus},
+	}
+	for _, tc := range cases {
+		if got := fromHeliosChunkType(tc.in); got != tc.want {
+			t.Fatalf("chunk type %q = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	if got := fromHeliosUsage(nil); got != nil {
+		t.Fatalf("nil usage should remain nil: %+v", got)
+	}
+	chunk := fromHeliosChunk(helioscontracts.Chunk{Type: helioscontracts.ChunkError, Content: "boom", IsError: true})
+	if chunk.Type != agent.ChunkTypeError || !chunk.IsError || chunk.Content != "boom" {
+		t.Fatalf("error chunk mapping failed: %+v", chunk)
 	}
 }
 
@@ -166,5 +208,49 @@ func TestHeliosAdapterRoutesUsageEventsToSessionCallback(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Type != agent.ChunkTypeUsage || got[0].Usage.OutputTokens != 9 {
 		t.Fatalf("callback did not receive usage chunk: %+v", got)
+	}
+}
+
+func TestHeliosAdapterSessionStateAccessors(t *testing.T) {
+	adapter := newHeliosAdapter(zap.NewNop())
+	if got := adapter.GetSessionStatus("missing"); got != agent.SessionStatusIdle {
+		t.Fatalf("missing session status = %s", got)
+	}
+	adapter.mu.Lock()
+	adapter.sessions["s1"] = sessionInfo{
+		status:           agent.SessionStatusRunning,
+		agentSessionID:   "native-1",
+		usedNativeResume: true,
+	}
+	adapter.callbacks["s1"] = func(agent.Chunk) {}
+	adapter.mu.Unlock()
+
+	if got := adapter.GetSessionStatus("s1"); got != agent.SessionStatusRunning {
+		t.Fatalf("running status = %s", got)
+	}
+	if got := adapter.AgentSessionID("s1"); got != "native-1" {
+		t.Fatalf("agent session id = %q", got)
+	}
+	if !adapter.UsedNativeResume("s1") {
+		t.Fatal("native resume flag should be true")
+	}
+	if err := adapter.StopSession("missing"); err == nil {
+		t.Fatal("stopping a missing Helios session should surface adapter error")
+	}
+	if _, ok := adapter.callbacks["s1"]; !ok {
+		t.Fatal("unrelated callback should remain after stopping missing session")
+	}
+}
+
+func TestHeliosAdapterErrorPaths(t *testing.T) {
+	adapter := newHeliosAdapter(zap.NewNop())
+	if err := adapter.StartSession(context.Background(), "s-nil", nil); err == nil {
+		t.Fatal("nil session request should fail")
+	}
+	if err := adapter.Prompt(context.Background(), "missing", "hi", nil, func(agent.Chunk) {}); err == nil {
+		t.Fatal("prompting missing session should fail")
+	}
+	if err := adapter.CheckHealth(context.Background(), agent.AgentSpec{Type: TypeHermes, CliPath: "/path/that/does/not/exist"}); err == nil {
+		t.Fatal("health check with missing cli should fail")
 	}
 }

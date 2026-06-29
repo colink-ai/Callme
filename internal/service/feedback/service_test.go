@@ -312,6 +312,34 @@ func TestManualDraftAndAIHelpers(t *testing.T) {
 	}
 }
 
+func TestManualDraftStreamFallsBackToNonStreaming(t *testing.T) {
+	s, _, _ := newTestService(t)
+	ctx := context.Background()
+	s.agentSpec = func() agent.AgentSpec {
+		return agent.AgentSpec{DefaultModel: "test-model", APIURL: "http://callme-ai.test", APIToken: "token"}
+	}
+	call := 0
+	restore := mockFeedbackAI(t, func(req *http.Request, body string) string {
+		call++
+		if strings.Contains(body, `"stream":true`) {
+			return `{"choices":[{"message":{"content":"not an event stream"}}]}`
+		}
+		return `{"choices":[{"message":{"content":"{\"title\":\"Fallback\",\"question\":\"Q\",\"content\":\"C\",\"confidence\":0.9,\"reason\":\"R\"}"}}]}`
+	})
+	defer restore()
+
+	var events []ManualDraftStreamEvent
+	if err := s.CreateManualDraftStream(ctx, ManualDraftRequest{Description: "fallback"}, func(ev ManualDraftStreamEvent) error {
+		events = append(events, ev)
+		return nil
+	}); err != nil {
+		t.Fatalf("manual draft stream fallback: %v", err)
+	}
+	if call != 2 || len(events) != 2 || events[0].Type != "status" || events[1].Candidate == nil || events[1].Candidate.Title != "Fallback" {
+		t.Fatalf("fallback call=%d events=%+v", call, events)
+	}
+}
+
 func TestAILearningAndHermesEditHelpers(t *testing.T) {
 	ctx := context.Background()
 	spec := agent.AgentSpec{DefaultModel: "test-model", APIURL: "http://callme-ai.test", APIToken: "token"}
@@ -344,6 +372,122 @@ func TestAILearningAndHermesEditHelpers(t *testing.T) {
 	})
 	if err != nil || out != "# New Skill" || !strings.Contains(streamed.String(), "# New") {
 		t.Fatalf("runAIHermesLearningEditStream out=%q streamed=%q err=%v", out, streamed.String(), err)
+	}
+	messages := buildHermesLearningEditMessages(model.HermesLearningAssetMemory, "# Memory", "改写")
+	if len(messages) != 2 || !strings.Contains(messages[1]["content"], string(model.HermesLearningAssetMemory)) {
+		t.Fatalf("unexpected hermes edit messages: %+v", messages)
+	}
+}
+
+func TestRuntimeLearningAssistServicePaths(t *testing.T) {
+	s, store, home := newTestService(t)
+	ctx := context.Background()
+	path := filepath.Join(home, "skills", "assist", "SKILL.md")
+	mustWriteFeedbackTest(t, path, "# Assist Skill\n\nold")
+	if err := s.auditRuntimeLearning(ctx); err != nil {
+		t.Fatalf("audit runtime learning: %v", err)
+	}
+	assets, err := s.ListRuntimeLearningAssets(ctx, model.RuntimeLearningStatusPendingReview)
+	if err != nil || len(assets) != 1 {
+		t.Fatalf("list assets len=%d err=%v", len(assets), err)
+	}
+
+	if _, err := s.AssistRuntimeLearningEdit(ctx, assets[0].ID, AssistRuntimeLearningEditRequest{Instruction: "改写"}); err == nil {
+		t.Fatal("missing AI config should fail")
+	}
+	s.agentSpec = func() agent.AgentSpec {
+		return agent.AgentSpec{DefaultModel: "test-model", APIURL: "http://callme-ai.test", APIToken: "token"}
+	}
+	restore := mockFeedbackAI(t, func(req *http.Request, body string) string {
+		if strings.Contains(body, `"stream":true`) {
+			return "data: {\"choices\":[{\"delta\":{\"content\":\"# Stream\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" Assist\"}}]}\n\ndata: [DONE]\n\n"
+		}
+		return `{"choices":[{"message":{"content":"# Assisted Skill"}}]}`
+	})
+	defer restore()
+
+	assisted, err := s.AssistRuntimeLearningEdit(ctx, assets[0].ID, AssistRuntimeLearningEditRequest{Instruction: "改写"})
+	if err != nil {
+		t.Fatalf("assist edit: %v", err)
+	}
+	if assisted != "# Assisted Skill" {
+		t.Fatalf("assist output = %q", assisted)
+	}
+	var events []ManualDraftStreamEvent
+	if err := s.AssistRuntimeLearningEditStream(ctx, assets[0].ID, AssistRuntimeLearningEditRequest{Instruction: "流式改写"}, func(ev ManualDraftStreamEvent) error {
+		events = append(events, ev)
+		return nil
+	}); err != nil {
+		t.Fatalf("assist edit stream: %v", err)
+	}
+	if len(events) < 2 || events[len(events)-1].Type != "done" || events[len(events)-1].Content != "# Stream Assist" {
+		t.Fatalf("unexpected assist stream events: %+v", events)
+	}
+
+	empty := &model.RuntimeLearningAsset{
+		ID:          "empty-runtime-asset",
+		AgentType:   "hermes",
+		AssetType:   model.RuntimeLearningAssetSkill,
+		Path:        filepath.Join(home, "empty", "SKILL.md"),
+		ContentHash: "empty",
+		Status:      model.RuntimeLearningStatusPendingReview,
+		RiskFlags:   "[]",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	if err := store.CreateRuntimeLearningAsset(ctx, empty); err != nil {
+		t.Fatalf("create empty asset: %v", err)
+	}
+	if _, err := s.AssistRuntimeLearningEdit(ctx, empty.ID, AssistRuntimeLearningEditRequest{Instruction: "改写"}); err == nil {
+		t.Fatal("empty asset content should fail")
+	}
+
+	var hermesEvents []ManualDraftStreamEvent
+	if err := s.AssistHermesLearningEditStream(ctx, assets[0].ID, AssistHermesLearningEditRequest{Instruction: "Hermes 流式"}, func(ev ManualDraftStreamEvent) error {
+		hermesEvents = append(hermesEvents, ev)
+		return nil
+	}); err != nil {
+		t.Fatalf("assist hermes edit stream: %v", err)
+	}
+	if len(hermesEvents) == 0 || hermesEvents[len(hermesEvents)-1].Type != "done" {
+		t.Fatalf("unexpected hermes stream events: %+v", hermesEvents)
+	}
+}
+
+func TestRuntimeLearningAssistStreamFallsBackToNonStreaming(t *testing.T) {
+	s, _, home := newTestService(t)
+	ctx := context.Background()
+	path := filepath.Join(home, "skills", "fallback", "SKILL.md")
+	mustWriteFeedbackTest(t, path, "# Fallback Skill\n")
+	if err := s.auditRuntimeLearning(ctx); err != nil {
+		t.Fatalf("audit runtime learning: %v", err)
+	}
+	assets, err := s.ListRuntimeLearningAssets(ctx, model.RuntimeLearningStatusPendingReview)
+	if err != nil || len(assets) != 1 {
+		t.Fatalf("list assets len=%d err=%v", len(assets), err)
+	}
+	s.agentSpec = func() agent.AgentSpec {
+		return agent.AgentSpec{DefaultModel: "test-model", APIURL: "http://callme-ai.test", APIToken: "token"}
+	}
+	call := 0
+	restore := mockFeedbackAI(t, func(req *http.Request, body string) string {
+		call++
+		if strings.Contains(body, `"stream":true`) {
+			return `{"choices":[{"message":{"content":"not an event stream"}}]}`
+		}
+		return `{"choices":[{"message":{"content":"# Fallback Revised"}}]}`
+	})
+	defer restore()
+
+	var events []ManualDraftStreamEvent
+	if err := s.AssistRuntimeLearningEditStream(ctx, assets[0].ID, AssistRuntimeLearningEditRequest{Instruction: "改写"}, func(ev ManualDraftStreamEvent) error {
+		events = append(events, ev)
+		return nil
+	}); err != nil {
+		t.Fatalf("fallback stream: %v", err)
+	}
+	if call != 2 || len(events) != 2 || events[0].Type != "status" || events[1].Content != "# Fallback Revised" {
+		t.Fatalf("fallback call=%d events=%+v", call, events)
 	}
 }
 
@@ -379,6 +523,38 @@ func TestParseHelpersAndValidationErrors(t *testing.T) {
 	}
 }
 
+func TestRuntimeLearningScanMemoryAndFilters(t *testing.T) {
+	s, _, home := newTestService(t)
+	mustWriteFeedbackTest(t, filepath.Join(home, "memories", "MEMORY.md"), "# Memory\n")
+	mustWriteFeedbackTest(t, filepath.Join(home, "memories", ".hidden.md"), "hidden")
+	mustWriteFeedbackTest(t, filepath.Join(home, "memories", "nested", "MEMORY.md"), "nested")
+	mustWriteFeedbackTest(t, filepath.Join(home, "memories", "draft.txt"), "txt")
+	mustWriteFeedbackTest(t, filepath.Join(home, "skills", "visible", "SKILL.md"), "# Skill\n")
+	mustWriteFeedbackTest(t, filepath.Join(home, "skills", "visible", "SKILL.md.lock"), "lock")
+
+	files, err := scanHermesLearningFiles(home)
+	if err != nil {
+		t.Fatalf("scan hermes files: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("scan should keep one memory and one skill, got %+v", files)
+	}
+	if !isRuntimeLearningAssetFile(filepath.Join(home, "skills"), filepath.Join(home, "skills", "visible", "SKILL.md"), model.RuntimeLearningAssetSkill) {
+		t.Fatal("root skill file should be accepted")
+	}
+	if isRuntimeLearningAssetFile(filepath.Join(home, "memories"), filepath.Join(home, "memories", "nested", "MEMORY.md"), model.RuntimeLearningAssetMemory) {
+		t.Fatal("nested memory should be ignored")
+	}
+	if isRuntimeLearningAssetFile(filepath.Join(home, "memories"), filepath.Join(home, "memories", "MEMORY.md"), model.RuntimeLearningAssetType("other")) {
+		t.Fatal("unknown asset type should be ignored")
+	}
+
+	s.agentSpec = func() agent.AgentSpec { return agent.AgentSpec{Type: "custom"} }
+	if provider := s.runtimeLearningProvider(); provider != nil {
+		t.Fatalf("custom agent should not have runtime learning provider: %+v", provider)
+	}
+}
+
 func TestSubmitAndServiceLifecycle(t *testing.T) {
 	s, store, home := newTestService(t)
 	ctx := context.Background()
@@ -411,6 +587,77 @@ func TestSubmitAndServiceLifecycle(t *testing.T) {
 	}
 	if fb.Correction != "corrected answer" || fb.Rating != model.FeedbackDown {
 		t.Fatalf("unexpected feedback: %+v", fb)
+	}
+}
+
+func TestListLearningJobsMarksStaleRunningJobFailed(t *testing.T) {
+	s, store, _ := newTestService(t)
+	ctx := context.Background()
+	started := time.Now().Add(-10 * time.Minute)
+	job := &model.LearningJob{
+		ID:        "stale-job",
+		Source:    "history",
+		Status:    model.LearningJobStatusRunning,
+		StartedAt: started,
+	}
+	if err := store.CreateLearningJob(ctx, job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	jobs, err := s.ListLearningJobs(ctx)
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].Status != model.LearningJobStatusFailed || jobs[0].FinishedAt == nil {
+		t.Fatalf("stale job not marked failed: %+v", jobs)
+	}
+}
+
+func TestAILearnFromHistoryAndStartLearningJobNow(t *testing.T) {
+	s, store, _ := newTestService(t)
+	ctx := context.Background()
+	if err := s.aiLearnFromHistory(ctx); err != nil {
+		t.Fatalf("aiLearnFromHistory without config should record skipped job: %v", err)
+	}
+	s.agentSpec = func() agent.AgentSpec {
+		return agent.AgentSpec{DefaultModel: "test-model", APIURL: "http://callme-ai.test", APIToken: "token"}
+	}
+	restore := mockFeedbackAI(t, func(req *http.Request, body string) string {
+		return `{"choices":[{"message":{"content":"{\"candidates\":[]}"}}]}`
+	})
+	defer restore()
+	now := time.Now()
+	sess := &model.Session{ID: "async-history", ClientID: "u1", UserID: "u1", Status: model.SessionStatusClosed, CreatedAt: now.Add(-time.Hour), ClosedAt: &now}
+	if err := store.CreateSession(ctx, sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := store.CreateMessage(ctx, &model.Message{ID: "async-user", SessionID: sess.ID, Role: model.MessageRoleUser, Content: "Q", CreatedAt: now}); err != nil {
+		t.Fatalf("create user message: %v", err)
+	}
+	if err := store.CreateMessage(ctx, &model.Message{ID: "async-assistant", SessionID: sess.ID, Role: model.MessageRoleAssistant, Content: "A", CreatedAt: now.Add(time.Second)}); err != nil {
+		t.Fatalf("create assistant message: %v", err)
+	}
+	job, err := s.StartLearningJobNow(ctx)
+	if err != nil {
+		t.Fatalf("start learning job: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		jobs, err := s.ListLearningJobs(ctx)
+		if err != nil {
+			t.Fatalf("list jobs: %v", err)
+		}
+		for _, got := range jobs {
+			if got.ID == job.ID && got.Status != model.LearningJobStatusRunning {
+				if got.Status != model.LearningJobStatusSucceeded {
+					t.Fatalf("async job status = %+v", got)
+				}
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("async learning job did not finish: %s", job.ID)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

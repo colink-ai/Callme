@@ -109,6 +109,52 @@ agent:
 	}
 }
 
+func TestAgentRuntimeDirsAndFallbacks(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "runtime")
+	agent := AgentConfig{Type: "Hermes", RuntimeRoot: root}
+	if got := agent.DomainRuntimeDir(" !!! "); got != filepath.Join(root, DefaultDomainID) {
+		t.Fatalf("empty sanitized domain dir = %q", got)
+	}
+	if got := agent.AgentRuntimeDirForDomain("Ops_01", " !!! "); got != filepath.Join(root, "ops_01", "hermes") {
+		t.Fatalf("fallback agent runtime dir = %q", got)
+	}
+	if err := agent.EnsureDomainRuntimeDirs("Ops_01", "Claude Code"); err != nil {
+		t.Fatalf("ensure runtime dirs: %v", err)
+	}
+	for _, dir := range []string{
+		filepath.Join(root, "ops_01", "claudecode", "home"),
+		filepath.Join(root, "ops_01", "claudecode", "workdir"),
+	} {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Fatalf("runtime dir missing %s info=%+v err=%v", dir, info, err)
+		}
+	}
+
+	legacy := AgentConfig{HermesHome: "legacy-home", WorkDir: "legacy-work"}
+	if legacy.DomainRuntimeDir("ops") != "" {
+		t.Fatal("legacy config without runtime root should not expose domain dir")
+	}
+	if err := legacy.EnsureDomainRuntimeDirs("ops", "hermes"); err != nil {
+		t.Fatalf("legacy ensure should be no-op: %v", err)
+	}
+	if legacy.RuntimeHomeForDomain("ops") != "legacy-home" || legacy.WorkDirForDomain("ops") != "legacy-work" {
+		t.Fatalf("legacy paths not preserved: %+v", legacy)
+	}
+}
+
+func TestLoadMissingAndInvalidConfig(t *testing.T) {
+	if _, err := Load(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
+		t.Fatal("missing config should fail")
+	}
+	path := filepath.Join(t.TempDir(), "bad.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  port: [bad"), 0o644); err != nil {
+		t.Fatalf("write bad config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("invalid yaml should fail")
+	}
+}
+
 func loadTestConfig(t *testing.T, body string) *Config {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")

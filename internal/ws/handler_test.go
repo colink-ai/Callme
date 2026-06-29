@@ -120,6 +120,18 @@ func TestHandleWebSocketFullMessageFlow(t *testing.T) {
 	if err := conn.WriteJSON(clientMessage{Type: "ping"}); err != nil {
 		t.Fatalf("write ping: %v", err)
 	}
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("{bad-json")); err != nil {
+		t.Fatalf("write bad json: %v", err)
+	}
+	if err := conn.WriteJSON(clientMessage{Type: "unknown"}); err != nil {
+		t.Fatalf("write unknown: %v", err)
+	}
+	if err := conn.WriteJSON(clientMessage{Type: "user_message"}); err != nil {
+		t.Fatalf("write empty user message: %v", err)
+	}
+	if err := conn.WriteJSON(clientMessage{Type: "stop"}); err != nil {
+		t.Fatalf("write stop: %v", err)
+	}
 	if err := conn.WriteJSON(clientMessage{Type: "user_message", Content: "hello"}); err != nil {
 		t.Fatalf("write user message: %v", err)
 	}
@@ -188,5 +200,12 @@ func TestHandleWebSocketAuthBoundaries(t *testing.T) {
 	router.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("other user should be forbidden, got %d %s", rr.Code, rr.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ws/missing?token="+owner.Token, nil)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("missing session should be forbidden, got %d %s", rr.Code, rr.Body.String())
 	}
 }

@@ -82,3 +82,19 @@ func TestMigrateIdempotent(t *testing.T) {
 		t.Fatalf("version drifted on reopen: %d != %d", got, v1)
 	}
 }
+
+func TestOpenRejectsUnsupportedDriverAndSchemaVersionError(t *testing.T) {
+	if _, err := Open("postgres", filepath.Join(t.TempDir(), "bad.db")); err == nil {
+		t.Fatal("unsupported driver should fail")
+	}
+	db, err := Open("sqlite", filepath.Join(t.TempDir(), "closed.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	if got := SchemaVersion(db); got != 0 {
+		t.Fatalf("closed db schema version = %d, want 0", got)
+	}
+}

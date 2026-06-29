@@ -7,6 +7,7 @@ import { useAuthStore } from '../../store/authStore';
 import type { Domain, User, UserRole } from '../../types';
 
 const { Title } = Typography;
+const DEFAULT_DOMAIN_ID = 'domain-default';
 
 const roleLabels: Record<UserRole, string> = {
   normal: '普通用户',
@@ -49,7 +50,7 @@ export default function UsersPage() {
   const updateUser = async (user: User, patch: Partial<Pick<User, 'roles' | 'maxSessions' | 'domainIds'>>) => {
     const roles = patch.roles ?? (user.roles?.length ? user.roles : [user.role]);
     const maxSessions = patch.maxSessions ?? user.maxSessions;
-    const domainIds = patch.domainIds ?? user.domainIds ?? ['default'];
+    const domainIds = patch.domainIds ?? user.domainIds ?? [DEFAULT_DOMAIN_ID];
     try {
       await api.updateUserRole(user.id, roles, maxSessions, domainIds);
       message.success('用户配置已更新');
@@ -99,7 +100,7 @@ export default function UsersPage() {
             render: (_: string[] | undefined, record) => (
               <Select
                 mode="multiple"
-                value={record.domainIds?.length ? record.domainIds : ['default']}
+                value={record.domainIds?.length ? record.domainIds : [DEFAULT_DOMAIN_ID]}
                 style={{ width: 240 }}
                 disabled={record.roles?.includes('admin') || record.role === 'admin'}
                 placeholder="选择领域"

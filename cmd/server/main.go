@@ -61,6 +61,33 @@ func newLogger(cfg config.LogConfig) (*zap.Logger, io.Writer, error) {
 	return zap.New(core, zap.AddCaller()), sink, nil
 }
 
+func migrateLegacyDefaultRuntimeDir(agentCfg config.AgentConfig, logger *zap.Logger) {
+	if agentCfg.RuntimeRoot == "" {
+		return
+	}
+	legacy := filepath.Join(agentCfg.RuntimeRoot, "default")
+	next := filepath.Join(agentCfg.RuntimeRoot, model.DefaultDomainID)
+	if _, err := os.Stat(legacy); err != nil {
+		return
+	}
+	if _, err := os.Stat(next); err == nil {
+		logger.Warn("legacy default runtime directory still exists; target already exists",
+			zap.String("legacy", legacy),
+			zap.String("target", next))
+		return
+	}
+	if err := os.Rename(legacy, next); err != nil {
+		logger.Warn("migrate legacy default runtime directory failed",
+			zap.String("legacy", legacy),
+			zap.String("target", next),
+			zap.Error(err))
+		return
+	}
+	logger.Info("legacy default runtime directory migrated",
+		zap.String("legacy", legacy),
+		zap.String("target", next))
+}
+
 func main() {
 	configPath := flag.String("config", "configs/config.yaml", "配置文件路径")
 	webDist := flag.String("web", "web/dist", "前端构建产物目录（空字符串禁用静态服务）")
@@ -101,6 +128,7 @@ func main() {
 	}
 
 	settingsSvc := settings.NewService(store, cfg.Agent, cfg.Session, logger)
+	migrateLegacyDefaultRuntimeDir(cfg.Agent, logger)
 	if domains, err := store.ListDomains(context.Background(), true); err != nil {
 		logger.Warn("list domains for runtime directory initialization failed", zap.Error(err))
 	} else {

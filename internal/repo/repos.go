@@ -27,7 +27,7 @@ func NewStore(db *sql.DB) *Store {
 // CreateSession 写入新会话
 func (s *Store) CreateSession(ctx context.Context, sess *model.Session) error {
 	if sess.DomainID == "" {
-		sess.DomainID = "default"
+		sess.DomainID = model.DefaultDomainID
 	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO sessions (id, client_id, user_id, domain_id, status, created_at, started_at, closed_at, close_reason, title, agent_session_id)
@@ -243,7 +243,7 @@ func scanSession(r rowScanner) (*model.Session, error) {
 		return nil, err
 	}
 	if sess.DomainID == "" {
-		sess.DomainID = "default"
+		sess.DomainID = model.DefaultDomainID
 	}
 	if startedAt.Valid {
 		sess.StartedAt = &startedAt.Time
@@ -260,7 +260,7 @@ func (s *Store) EnsureDefaultDomain(ctx context.Context) error {
 	now := time.Now()
 	_, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO domains (id, name, description, enabled, created_at, updated_at)
-		 VALUES ('default', '默认领域', '默认领域，兼容既有会话和知识配置。', TRUE, ?, ?)`, now, now)
+		 VALUES (?, '默认领域', '默认领域，兼容既有会话和知识配置。', TRUE, ?, ?)`, model.DefaultDomainID, now, now)
 	return err
 }
 
@@ -290,13 +290,13 @@ func (s *Store) ListDomainsForUser(ctx context.Context, user *model.User, includ
 	if user != nil && user.HasRole(model.UserRoleAdmin) {
 		return s.ListDomains(ctx, includeDisabled)
 	}
-	where := "WHERE d.enabled=TRUE AND (ud.user_id=? OR d.id='default')"
-	args := []any{""}
+	where := "WHERE d.enabled=TRUE AND (ud.user_id=? OR d.id=?)"
+	args := []any{"", model.DefaultDomainID}
 	if user != nil {
 		args[0] = user.ID
 	}
 	if includeDisabled {
-		where = "WHERE ud.user_id=? OR d.id='default'"
+		where = "WHERE ud.user_id=? OR d.id=?"
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT DISTINCT d.id, d.name, d.description, d.default_agent_id, d.enabled, d.created_at, d.updated_at
@@ -323,7 +323,7 @@ func (s *Store) UserCanUseDomain(ctx context.Context, user *model.User, domainID
 	if user != nil && user.HasRole(model.UserRoleAdmin) {
 		return true, nil
 	}
-	if domainID == "" || domainID == "default" {
+	if domainID == "" || domainID == model.DefaultDomainID {
 		return true, nil
 	}
 	var n int
@@ -473,8 +473,8 @@ func (s *Store) CreateUser(ctx context.Context, u *model.User) error {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO user_domains (user_id, domain_id, created_at) VALUES (?, 'default', ?)`,
-		u.ID, time.Now())
+		`INSERT OR IGNORE INTO user_domains (user_id, domain_id, created_at) VALUES (?, ?, ?)`,
+		u.ID, model.DefaultDomainID, time.Now())
 	return err
 }
 

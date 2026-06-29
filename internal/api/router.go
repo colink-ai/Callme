@@ -79,6 +79,7 @@ func NewRouter(d *Deps) *gin.Engine {
 		protected.GET("/sessions", d.adminRequired(), d.listLiveSessions) // 监控页：活跃 + 排队
 		protected.GET("/agent/capabilities", d.getAgentCapabilities)
 		protected.GET("/domains", d.listDomains)
+		protected.POST("/domains", d.adminRequired(), d.createDomain)
 		protected.GET("/domains/:id", d.getDomain)
 		protected.PUT("/domains/:id", d.adminRequired(), d.upsertDomain)
 		protected.PUT("/domains/:id/sources/:sourceId", d.adminRequired(), d.upsertKnowledgeSource)
@@ -295,7 +296,7 @@ func (d *Deps) createSession(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 	if req.DomainID == "" {
-		req.DomainID = "default"
+		req.DomainID = model.DefaultDomainID
 	}
 	domain, err := d.Store.GetDomain(c.Request.Context(), req.DomainID)
 	if err != nil || !domain.Enabled {
@@ -386,6 +387,37 @@ func (d *Deps) attachRuntimePaths(domains ...*model.Domain) {
 		}
 		domain.RuntimePath = d.AgentCfg.AgentRuntimeDirForDomain(domain.ID, agentType)
 	}
+}
+
+func (d *Deps) createDomain(c *gin.Context) {
+	var req model.Domain
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "领域名称不能为空"})
+		return
+	}
+	req.ID = d.newDomainID()
+	req.Name = strings.TrimSpace(req.Name)
+	req.Enabled = true
+	if err := d.Store.UpsertDomain(c.Request.Context(), &req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := d.ensureDomainRuntime(req.ID); err != nil {
+		d.Logger.Warn("ensure domain runtime directory failed", zap.String("domainID", req.ID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建领域运行时目录失败"})
+		return
+	}
+	domain, _ := d.Store.GetDomain(c.Request.Context(), req.ID)
+	d.attachRuntimePaths(domain)
+	c.JSON(http.StatusOK, domain)
+}
+
+func (d *Deps) newDomainID() string {
+	return "domain-" + strings.ToLower(strings.ReplaceAll(uuid.NewString()[:8], "-", ""))
 }
 
 func (d *Deps) upsertDomain(c *gin.Context) {

@@ -107,6 +107,8 @@ export const api = {
     http.get<{ domains: Domain[] | null }>('/domains', { params: includeDisabled ? { includeDisabled: true } : {} })
       .then((r) => r.data.domains ?? []),
   getDomain: (id: string) => http.get<Domain>(`/domains/${id}`).then((r) => r.data),
+  createDomain: (domain: Pick<Domain, 'name' | 'description' | 'enabled'>) =>
+    http.post<Domain>('/domains', domain).then((r) => r.data),
   upsertDomain: (domain: Domain) => http.put<Domain>(`/domains/${domain.id}`, domain).then((r) => r.data),
   upsertKnowledgeSource: (domainId: string, source: KnowledgeSource) =>
     http.put<Domain>(`/domains/${domainId}/sources/${source.id || 'new'}`, source).then((r) => r.data),

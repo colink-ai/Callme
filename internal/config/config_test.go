@@ -95,10 +95,10 @@ func TestAgentRuntimeRootDerivesDefaultDomainPaths(t *testing.T) {
 agent:
   runtime_root: data/agent-runtime
 `)
-	if cfg.Agent.HermesHome != "data/agent-runtime/default/hermes/home" {
+	if cfg.Agent.HermesHome != "data/agent-runtime/domain-default/hermes/home" {
 		t.Fatalf("default runtime home = %q", cfg.Agent.HermesHome)
 	}
-	if cfg.Agent.WorkDir != "data/agent-runtime/default/hermes/workdir" {
+	if cfg.Agent.WorkDir != "data/agent-runtime/domain-default/hermes/workdir" {
 		t.Fatalf("default work dir = %q", cfg.Agent.WorkDir)
 	}
 	if got := cfg.Agent.RuntimeHomeForDomain("Ops Team!"); got != "data/agent-runtime/opsteam/hermes/home" {

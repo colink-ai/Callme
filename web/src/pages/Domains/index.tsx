@@ -5,6 +5,7 @@ import { api, apiErrorMessage } from '../../api/client';
 import type { Domain, KnowledgeSource } from '../../types';
 
 const { Title, Text } = Typography;
+const DEFAULT_DOMAIN_ID = 'domain-default';
 
 const emptyDomain = (): Domain => ({
   id: '',
@@ -45,10 +46,10 @@ function formatEnv(value?: Record<string, string>): string {
 
 export default function DomainsPage() {
   const [domains, setDomains] = useState<Domain[]>([]);
-  const [selectedID, setSelectedID] = useState('default');
+  const [selectedID, setSelectedID] = useState('');
   const [domain, setDomain] = useState<Domain>(emptyDomain());
   const [loading, setLoading] = useState(false);
-  const [sourceDraft, setSourceDraft] = useState<KnowledgeSource>(emptySource('default'));
+  const [sourceDraft, setSourceDraft] = useState<KnowledgeSource>(emptySource(DEFAULT_DOMAIN_ID));
   const [sourceArgsText, setSourceArgsText] = useState('');
   const [sourceEnvText, setSourceEnvText] = useState('');
 
@@ -57,7 +58,7 @@ export default function DomainsPage() {
     try {
       const items = await api.listDomains(true);
       setDomains(items);
-      const id = nextID || items[0]?.id || 'default';
+      const id = nextID || items[0]?.id || DEFAULT_DOMAIN_ID;
       setSelectedID(id);
       const detail = await api.getDomain(id);
       setDomain(detail);
@@ -72,17 +73,18 @@ export default function DomainsPage() {
   };
 
   useEffect(() => {
-    load('default');
+    load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const saveDomain = async () => {
-    if (!domain.id.trim() || !domain.name.trim()) {
-      message.warning('请输入领域 ID 和名称');
+    if (!domain.name.trim()) {
+      message.warning('请输入领域名称');
       return;
     }
     try {
-      const saved = await api.upsertDomain({ ...domain, id: domain.id.trim(), name: domain.name.trim() });
+      const payload = { ...domain, name: domain.name.trim() };
+      const saved = domain.id ? await api.upsertDomain(payload) : await api.createDomain(payload);
       message.success('领域已保存');
       await load(saved.id);
     } catch (err) {
@@ -158,12 +160,11 @@ export default function DomainsPage() {
           <Card title="领域信息">
             <Form layout="vertical">
               <Space size="large" wrap>
-                <Form.Item label="领域 ID" required>
+                <Form.Item label="领域 ID">
                   <Input
                     value={domain.id}
-                    disabled={domain.id === 'default'}
-                    placeholder="如 ops、dev、hr"
-                    onChange={(e) => setDomain((prev) => ({ ...prev, id: e.target.value }))}
+                    disabled
+                    placeholder="保存后自动生成"
                   />
                 </Form.Item>
                 <Form.Item label="名称" required>

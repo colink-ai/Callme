@@ -3,6 +3,8 @@ package model
 
 import "time"
 
+const DefaultDomainID = "domain-default"
+
 // UserRole 用户角色：普通用户 / VIP / 知识专员 / 知识专家 / 管理员
 type UserRole string
 

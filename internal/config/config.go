@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"callme/internal/model"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -63,7 +65,7 @@ type AgentConfig struct {
 	PromptTimeout time.Duration `yaml:"prompt_timeout"` // ACP 单轮回答最长等待时间；负数表示不主动超时
 }
 
-const DefaultDomainID = "default"
+const DefaultDomainID = model.DefaultDomainID
 
 // RuntimeHomeForDomain 返回领域隔离后的 Agent Runtime 工作目录。
 // 配置 runtime_root 时使用新目录结构；否则回退到 hermes_home 兼容旧部署。

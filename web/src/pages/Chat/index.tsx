@@ -1,5 +1,5 @@
 // 用户端聊天页：排队状态、会话计时、流式回答、知识引用、反馈、转人工
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
 import {
   Alert,
   Button,
@@ -42,6 +42,7 @@ import {
   DownOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  RightOutlined,
 } from '@ant-design/icons';
 import { Avatar, List } from 'antd';
 import { UserOutlined } from '@ant-design/icons';
@@ -51,7 +52,7 @@ import dayjs from 'dayjs';
 import { useChatStore, toChatMessage, type AgentStep, type ChatMessage } from '../../store/chatStore';
 import { useDomainStore } from '../../store/domainStore';
 import { api, apiErrorMessage } from '../../api/client';
-import type { AgentCapabilities, ImageAttachment, Session } from '../../types';
+import type { AgentCapabilities, Domain, ImageAttachment, KnowledgeSource, Session } from '../../types';
 import { LogoIcon } from '../../components/Logo';
 import HermesIcon from '../../components/HermesIcon';
 
@@ -118,25 +119,27 @@ function SessionTimer({ startedAt }: { startedAt: string }) {
   );
 }
 
-// 知识源工具名美化：Hermes 把 MCP 工具命名为 mcp_<server>_<tool>
-// 例：mcp_wiki_graph_query → Wiki 知识图谱
-const KB_NAME_MAP: Record<string, string> = {
-  wiki_graph: 'Wiki 知识图谱',
-  code_graph: '代码知识图谱',
-};
-function prettyKnowledgeName(toolName: string): string | null {
+// Hermes 把 MCP 工具命名为 mcp_<server>_<tool>，例如 mcp_wiki_graph_query。
+// 展示名称以领域知识源配置为准，避免在前端硬编码知识库中文名。
+function knowledgeServerKey(toolName: string): string | null {
   if (!toolName.startsWith('mcp_')) return null; // 仅展示知识库 MCP 工具，隐藏 Agent 原生工具
   if (!/_(query|search|lookup|get)$/.test(toolName)) return null;
-  const body = toolName.slice(4).replace(/_(query|search|lookup|get)$/, '');
-  return KB_NAME_MAP[body] ?? body.replace(/_/g, '-');
+  return toolName.slice(4).replace(/_(query|search|lookup|get)$/, '');
 }
 
-function CitationTags({ msg }: { msg: ChatMessage }) {
+function knowledgeSourceLabel(serverKey: string, sources: KnowledgeSource[]): string {
+  const hyphenName = serverKey.replace(/_/g, '-');
+  const source = sources.find((item) => item.name === hyphenName || item.name.replace(/-/g, '_') === serverKey);
+  return source?.name || hyphenName;
+}
+
+function CitationTags({ msg, knowledgeSources }: { msg: ChatMessage; knowledgeSources: KnowledgeSource[] }) {
   // 只把知识库检索作为「引用来源」展示给用户（过滤掉 Agent 内部工具），按知识源去重
   const byLabel = new Map<string, string[]>();
   for (const c of msg.citations) {
-    const label = prettyKnowledgeName(c.toolName);
-    if (!label) continue;
+    const serverKey = knowledgeServerKey(c.toolName);
+    if (!serverKey) continue;
+    const label = knowledgeSourceLabel(serverKey, knowledgeSources);
     const q = (c.input?.query as string) ?? '';
     const list = byLabel.get(label) ?? [];
     if (q) list.push(q);
@@ -290,11 +293,13 @@ function MessageBubble({
   msg,
   sessionModel,
   sessionAgentType,
+  knowledgeSources,
   readOnly,
 }: {
   msg: ChatMessage;
   sessionModel?: string;
   sessionAgentType?: string;
+  knowledgeSources: KnowledgeSource[];
   readOnly?: boolean;
 }) {
   const isUser = msg.role === 'user';
@@ -350,7 +355,7 @@ function MessageBubble({
             msg.content || (msg.images?.length ? '已发送图片' : '')
           )}
         </div>
-        {!isUser && <CitationTags msg={msg} />}
+        {!isUser && <CitationTags msg={msg} knowledgeSources={knowledgeSources} />}
         {!isUser && !readOnly && <FeedbackBar msg={msg} />}
       </div>
     </div>
@@ -360,6 +365,7 @@ function MessageBubble({
 // 左侧历史会话栏
 function HistorySidebar({
   sessions,
+  domains,
   activeId,
   onSelect,
   onContinue,
@@ -369,6 +375,7 @@ function HistorySidebar({
   starting,
 }: {
   sessions: Session[];
+  domains: Domain[];
   activeId: string | null;
   onSelect: (s: Session) => void;
   onContinue: (s: Session) => void;
@@ -377,6 +384,23 @@ function HistorySidebar({
   onCollapse: () => void;
   starting: boolean;
 }) {
+  const domainName = (domainId?: string, domainName?: string) => (
+    domainName || domains.find((d) => d.id === domainId)?.name || domainId || '未分配领域'
+  );
+  const grouped = sessions.reduce<Array<{ id: string; name: string; sessions: Session[] }>>((acc, session) => {
+    const id = session.domainId || 'unknown';
+    let group = acc.find((item) => item.id === id);
+    if (!group) {
+      group = { id, name: domainName(session.domainId, session.domainName), sessions: [] };
+      acc.push(group);
+    }
+    group.sessions.push(session);
+    return acc;
+  }, []);
+  const activeKeys = grouped
+    .filter((group) => group.sessions.some((session) => session.id === activeId))
+    .map((group) => group.id);
+
   const copyText = async (text: string) => {
     if (navigator.clipboard?.writeText && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
@@ -425,60 +449,139 @@ function HistorySidebar({
         {sessions.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史" style={{ marginTop: 40 }} />
         ) : (
-          <List
-            dataSource={sessions}
-            split={false}
-            renderItem={(s) => (
-              <div
-                className={`history-item ${activeId === s.id ? 'active' : ''}`}
-                onClick={() => onSelect(s)}
-              >
-                <div className="history-item-title">{s.title || '未命名会话'}</div>
-                <div className="history-item-meta">
-                  <span className={`history-dot ${s.status}`} />
-                  {dayjs(s.createdAt).format('MM-DD HH:mm')}
-                </div>
-                <div className="history-item-actions" onClick={(e) => e.stopPropagation()}>
-                  <Tooltip title="复制会话 ID">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<CopyOutlined />}
-                      onClick={() => copySessionId(s)}
-                    />
-                  </Tooltip>
-                  {s.status === 'closed' && (
-                    <>
-                      <Tooltip title="继续问答">
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<PlayCircleOutlined />}
-                          disabled={starting}
-                          onClick={() => onContinue(s)}
-                        />
-                      </Tooltip>
-                    <Popconfirm
-                      title="删除该历史会话？"
-                      description="会同时删除该会话的消息、反馈和工单记录。"
-                      okText="删除"
-                      cancelText="取消"
-                      okButtonProps={{ danger: true }}
-                      onConfirm={() => onDelete(s)}
+          <Collapse
+            ghost
+            defaultActiveKey={activeKeys.length ? activeKeys : grouped.map((group) => group.id)}
+            className="history-domain-collapse"
+            items={grouped.map((group) => ({
+              key: group.id,
+              label: (
+                <Space size={6} className="history-domain-label">
+                  <Text strong>{group.name}</Text>
+                  <Tag>{group.sessions.length}</Tag>
+                </Space>
+              ),
+              children: (
+                <List
+                  dataSource={group.sessions}
+                  split={false}
+                  renderItem={(s) => (
+                    <div
+                      className={`history-item ${activeId === s.id ? 'active' : ''}`}
+                      onClick={() => onSelect(s)}
                     >
-                      <Tooltip title="删除历史">
-                        <Button type="text" danger size="small" icon={<DeleteOutlined />} />
-                      </Tooltip>
-                    </Popconfirm>
-                    </>
+                      <div className="history-item-title">{s.title || '未命名会话'}</div>
+                      <div className="history-item-meta">
+                        <span className={`history-dot ${s.status}`} />
+                        {dayjs(s.createdAt).format('MM-DD HH:mm')}
+                      </div>
+                      <div className="history-item-actions" onClick={(e) => e.stopPropagation()}>
+                        <Tooltip title="复制会话 ID">
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<CopyOutlined />}
+                            onClick={() => copySessionId(s)}
+                          />
+                        </Tooltip>
+                        {s.status === 'closed' && (
+                          <>
+                            <Tooltip title="继续问答">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<PlayCircleOutlined />}
+                                disabled={starting}
+                                onClick={() => onContinue(s)}
+                              />
+                            </Tooltip>
+                            <Popconfirm
+                              title="删除该历史会话？"
+                              description="会同时删除该会话的消息、反馈和工单记录。"
+                              okText="删除"
+                              cancelText="取消"
+                              okButtonProps={{ danger: true }}
+                              onConfirm={() => onDelete(s)}
+                            >
+                              <Tooltip title="删除历史">
+                                <Button type="text" danger size="small" icon={<DeleteOutlined />} />
+                              </Tooltip>
+                            </Popconfirm>
+                          </>
+                        )}
+                      </div>
+                    </div>
                   )}
-                </div>
-              </div>
-            )}
+                />
+              ),
+            }))}
           />
         )}
       </div>
     </div>
+  );
+}
+
+function DomainInfoPanel({
+  domain,
+  collapsed,
+  onToggle,
+}: {
+  domain?: Domain;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const sources = (domain?.knowledgeSources ?? []).filter((source) => source.enabled);
+  if (collapsed) {
+    return (
+      <Tooltip title="展开领域信息" placement="left">
+        <Button
+          className="domain-panel-expand-btn"
+          type="text"
+          icon={<MenuFoldOutlined />}
+          onClick={onToggle}
+        />
+      </Tooltip>
+    );
+  }
+
+  return (
+    <aside className="domain-panel">
+      <div className="domain-panel-head">
+        <Space size={8}>
+          <FileSearchOutlined style={{ color: 'var(--color-primary)' }} />
+          <Text strong>领域信息</Text>
+        </Space>
+        <Tooltip title="收起领域信息" placement="left">
+          <Button type="text" size="small" icon={<RightOutlined />} onClick={onToggle} />
+        </Tooltip>
+      </div>
+
+      <div className="domain-panel-body">
+        <section className="domain-info-section">
+          <Text type="secondary" className="domain-info-label">当前领域</Text>
+          <Title level={5} className="domain-info-title">{domain?.name || '未选择领域'}</Title>
+          <Text className="domain-info-description">
+            {domain?.description || '这个领域还没有填写说明。'}
+          </Text>
+        </section>
+
+        <section className="domain-info-section">
+          <Text type="secondary" className="domain-info-label">可用知识</Text>
+          {sources.length > 0 ? (
+            <div className="domain-source-list">
+              {sources.map((source) => (
+                <Tag key={source.id} className="domain-source-tag">
+                  {source.name}
+                </Tag>
+              ))}
+            </div>
+          ) : (
+            <Text type="secondary">暂无启用的知识源</Text>
+          )}
+        </section>
+      </div>
+    </aside>
   );
 }
 
@@ -578,6 +681,40 @@ export default function ChatPage() {
   const listRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [domainPanelCollapsed, setDomainPanelCollapsed] = useState(
+    () => localStorage.getItem('callme_domain_panel_collapsed') === '1',
+  );
+  const [domainDetail, setDomainDetail] = useState<Domain | null>(null);
+  const domainById = useMemo(() => new Map(domains.map((domain) => [domain.id, domain])), [domains]);
+  const liveDomainId = session?.domainId || selectedDomainId;
+  const viewingDomainId = viewing?.session.domainId || selectedDomainId;
+  const activeDomainId = viewing ? viewingDomainId : liveDomainId;
+  const domainFor = (domainId: string) => (domainDetail?.id === domainId ? domainDetail : domainById.get(domainId));
+  const liveKnowledgeSources = domainFor(liveDomainId)?.knowledgeSources ?? [];
+  const viewingKnowledgeSources = domainFor(viewingDomainId)?.knowledgeSources ?? [];
+  const activeDomain = domainFor(activeDomainId);
+  const toggleDomainPanel = (collapsed: boolean) => {
+    setDomainPanelCollapsed(collapsed);
+    localStorage.setItem('callme_domain_panel_collapsed', collapsed ? '1' : '0');
+  };
+
+  useEffect(() => {
+    if (!activeDomainId) {
+      setDomainDetail(null);
+      return;
+    }
+    let cancelled = false;
+    api.getDomain(activeDomainId)
+      .then((detail) => {
+        if (!cancelled) setDomainDetail(detail);
+      })
+      .catch(() => {
+        if (!cancelled) setDomainDetail(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeDomainId]);
 
   useEffect(() => {
     restoreSession();
@@ -760,6 +897,7 @@ export default function ChatPage() {
       ) : (
         <HistorySidebar
           sessions={historySessions}
+          domains={domains}
           activeId={activeHistoryId}
           onSelect={openHistory}
           onContinue={continueHistory}
@@ -773,25 +911,26 @@ export default function ChatPage() {
         />
       )}
 
-      {/* 右侧对话区 */}
-      <div className="chat-main">
-        {viewing ? (
-          // —— 历史会话只读视图 ——
-          <>
-            <div className="chat-main-head">
-              <Space>
-                <CustomerServiceOutlined style={{ fontSize: 20, color: 'var(--color-primary)' }} />
-                <Title level={4} style={{ margin: 0 }}>{viewing.session.title || '历史会话'}</Title>
-                <Tag>只读</Tag>
-              </Space>
-              <Button size="small" onClick={backToLive}>返回当前对话</Button>
-            </div>
+      {/* 主工作区：对话主窗口 + 领域信息栏 */}
+      <div className={`chat-content ${domainPanelCollapsed ? 'domain-panel-hidden' : ''}`}>
+        <div className="chat-main">
+          {viewing ? (
+            // —— 历史会话只读视图 ——
+            <>
+              <div className="chat-main-head">
+                <Space>
+                  <CustomerServiceOutlined style={{ fontSize: 20, color: 'var(--color-primary)' }} />
+                  <Title level={4} style={{ margin: 0 }}>{viewing.session.title || '历史会话'}</Title>
+                  <Tag>只读</Tag>
+                </Space>
+                <Button size="small" onClick={backToLive}>返回当前对话</Button>
+              </div>
             <div className="chat-messages">
               {viewing.messages.length === 0 ? (
                 <Empty description="该会话无消息" style={{ marginTop: 80 }} />
               ) : (
                 viewing.messages.map((m, i) => (
-                  <MessageBubble key={`${m.id}-${i}`} msg={m} sessionModel={m.model} readOnly />
+                  <MessageBubble key={`${m.id}-${i}`} msg={m} sessionModel={m.model} knowledgeSources={viewingKnowledgeSources} readOnly />
                 ))
               )}
             </div>
@@ -877,7 +1016,7 @@ export default function ChatPage() {
               )}
 
               {messages.map((m, i) => (
-                <MessageBubble key={`${m.id}-${i}`} msg={m} sessionModel={session?.model} sessionAgentType={session?.agentType} />
+                <MessageBubble key={`${m.id}-${i}`} msg={m} sessionModel={session?.model} sessionAgentType={session?.agentType} knowledgeSources={liveKnowledgeSources} />
               ))}
               {showScrollBottom && (
                 <Tooltip title="回到底部">
@@ -898,14 +1037,6 @@ export default function ChatPage() {
             {/* 输入区 */}
             {active && (
               <div className="chat-input-wrap" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
-                {!supportsMultimodal && (
-                  <Alert
-                    type="info"
-                    showIcon
-                    style={{ marginBottom: 8 }}
-                    message="当前模型不支持图片输入，文字问答可正常使用"
-                  />
-                )}
                 {images.length > 0 && (
                   <div className="image-preview-strip">
                     {images.map((img, index) => (
@@ -932,7 +1063,7 @@ export default function ChatPage() {
                   <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
                     <Input.TextArea
                       autoSize={{ minRows: 3, maxRows: 8 }}
-                      placeholder={busy ? '回答生成中…' : '输入您的问题，Enter 发送，Shift+Enter 换行，支持粘贴/拖拽图片'}
+                      placeholder={busy ? '回答生成中…' : supportsMultimodal ? '输入您的问题，Enter 发送，Shift+Enter 换行，支持粘贴/拖拽图片' : '输入您的问题，Enter 发送，Shift+Enter 换行'}
                       value={input}
                       disabled={busy}
                       onChange={(e) => setInput(e.target.value)}
@@ -954,7 +1085,7 @@ export default function ChatPage() {
                         <Button
                           type="text"
                           icon={<PictureOutlined />}
-                          disabled={busy || !supportsMultimodal || images.length >= MAX_IMAGES}
+                          disabled={busy || images.length >= MAX_IMAGES}
                           className="image-upload-button"
                         />
                       </Tooltip>
@@ -978,6 +1109,12 @@ export default function ChatPage() {
             )}
           </>
         )}
+        </div>
+        <DomainInfoPanel
+          domain={activeDomain}
+          collapsed={domainPanelCollapsed}
+          onToggle={() => toggleDomainPanel(!domainPanelCollapsed)}
+        />
       </div>
 
       {/* 转人工弹窗 */}

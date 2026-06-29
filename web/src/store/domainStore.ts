@@ -3,7 +3,7 @@ import { api, apiErrorMessage } from '../api/client';
 import type { Domain } from '../types';
 
 const DOMAIN_KEY = 'callme_domain_id';
-const DEFAULT_DOMAIN_ID = 'default';
+const DEFAULT_DOMAIN_ID = 'domain-default';
 
 interface DomainState {
   domains: Domain[];

@@ -24,5 +24,5 @@ test('user can register, start a chat, and receive a streamed agent answer', asy
 
   await expect(page.locator('.chat-bubble.user').filter({ hasText: '你好，请介绍一下 Callme' })).toBeVisible();
   await expect(page.getByText(/mock ACP agent 的回答/)).toBeVisible();
-  await expect(page.getByText(/代码知识图谱/)).toBeVisible();
+  await expect(page.getByText(/code-graph/)).toBeVisible();
 });
